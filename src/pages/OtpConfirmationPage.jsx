@@ -1,7 +1,9 @@
 import { useState } from "react";
 import axios from "axios";
-
+const location = useLocation();
+const { phone, mosque, quantity, sessionID } = location.state;
 function OtpConfirmationPage() {
+  
   const [otp, setOtp] = useState("");
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(false);
