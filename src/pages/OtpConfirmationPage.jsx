@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
+import { collection, addDoc } from "firebase/firestore";
+import { db } from "./firebase"; // ← عدل المسار حسب مكان ملف firebase.js
 
 function OtpConfirmationPage() {
   const [otp, setOtp] = useState("");
@@ -12,6 +14,23 @@ function OtpConfirmationPage() {
       setDonationData(JSON.parse(data));
     }
   }, []);
+
+  const saveDonation = async ({ phone, quantity, mosque, sessionID }) => {
+    try {
+      await addDoc(collection(db, "transactions"), {
+        customer: phone,
+        amount: quantity,
+        mosqueName: mosque,
+        sessionID: sessionID,
+        status: "confirmed",
+        timestamp: new Date().toISOString(),
+        deliveryStatus: "بانتظار التوصيل"
+      });
+      console.log("✅ تم تسجيل التبرع في Firestore");
+    } catch (error) {
+      console.error("❌ فشل في التسجيل:", error);
+    }
+  };
 
   const handleConfirm = async () => {
     if (!otp || !donationData?.sessionID) {
@@ -29,6 +48,7 @@ function OtpConfirmationPage() {
       });
 
       if (res.data.status === "OK") {
+        await saveDonation(donationData); // 🟢 تخزين التبرع في Firestore
         setStatus("✅ تم الدفع بنجاح");
         localStorage.removeItem("donation_data");
       } else {
