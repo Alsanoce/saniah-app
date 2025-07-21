@@ -7,9 +7,11 @@ const admin = require("firebase-admin");
 const fetch = require("node-fetch");
 const app = express();
 
+// 🛡️ Middlewares
 app.use(cors());
 app.use(bodyParser.json());
 
+// 🔐 Firebase Initialization
 const serviceAccount = require("./serviceAccountKey.json");
 
 if (!admin.apps.length) {
@@ -20,25 +22,27 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
-// 🟡 حفظ التبرع في Firestore
+// 💾 Save donation to Firestore
 async function saveToFirestore(donation) {
   await db.collection("donations").add(donation);
 }
 
-// 🟢 إرسال رسالة واتساب
+// 📲 Send WhatsApp message
 async function sendWhatsappMessage(text) {
-  const phone = "218926388438"; // ← رقم المندوب
-  const apikey = "API_KEY";     // ← API من CallMeBot
+  const phone = "218926388438"; // رقم المندوب
+  const apikey = "API_KEY";     // 🔁 غيّرها بمفتاح CallMeBot الخاص بك
   const url = `https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${encodeURIComponent(text)}&apikey=${apikey}`;
   await fetch(url);
 }
 
-// ✅ تأكيد الدفع
+// ✅ تأكيد الدفع عبر OTP
 app.post("/confirm", async (req, res) => {
   const { otp, sessionID, mosque, phone, quantity, location } = req.body;
-if (!otp || !sessionID) {
+
+  if (!otp || !sessionID) {
     return res.status(400).json({ error: "Missing OTP or sessionID" });
-}
+  }
+
   try {
     const xml = `
       <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -86,7 +90,7 @@ if (!otp || !sessionID) {
 
       await saveToFirestore(donation);
 
-      const msg = `📦 طلب سقيا مياه:\n🕌 المسجد: ${mosque}\n📞 المتبرع: ${phone}\n🧊 الكمية: ${quantity}\n📍 الموقع: ${location}`;
+      const msg = `📦 طلب سقيا مياه:\n🕌 المسجد: ${mosque}\n📞 المتبرع: ${phone}\n🧊 الكمية: ${quantity}\n📍 الموقع: ${location || "غير محدد"}`;
       await sendWhatsappMessage(msg);
 
       return res.json({ success: true, message: "تم الدفع بنجاح" });
@@ -99,6 +103,8 @@ if (!otp || !sessionID) {
   }
 });
 
-app.listen(5051, () => {
-  console.log("🚀 TDB Proxy server running on port 5051");
+// 🟢 تشغيل السيرفر
+const PORT = process.env.PORT || 5051;
+app.listen(PORT, () => {
+  console.log(`🚀 TDB Proxy server running on port ${PORT}`);
 });
