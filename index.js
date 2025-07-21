@@ -112,14 +112,12 @@ app.post("/confirm", async (req, res) => {
 
     console.log("📩 الرد الكامل من المصرف:
 ", data);
+const parsed = await parseStringPromise(data);
+const result =
+  parsed["soap:Envelope"]["soap:Body"][0]["OnlineConfTransResponse"][0]["OnlineConfTransResult"][0];
 
-    const parsed = await parseStringPromise(data);
-    const result =
-      parsed["soap:Envelope"]["soap:Body"][0]["OnlineConfTransResponse"][0]["OnlineConfTransResult"][0];
-
-    console.log("🎯 نتيجة التفسير:", result);
-
-    const status = result.trim() === "OK" ? "confirmed" : "failed";
+console.log("📌 القيمة الخام للرد:", JSON.stringify(result));
+const status = JSON.stringify(result).includes("OK") ? "confirmed" : "failed";
 
     const donation = {
       mosque,
