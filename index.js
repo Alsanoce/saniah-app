@@ -5,13 +5,11 @@ const axios = require("axios");
 const { parseStringPromise } = require("xml2js");
 const admin = require("firebase-admin");
 const fetch = require("node-fetch");
-const app = express();
 
-// 🛡️ Middlewares
+const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// 🔐 Firebase Initialization
 const serviceAccount = require("./serviceAccountKey.json");
 
 if (!admin.apps.length) {
@@ -22,20 +20,20 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
-// 💾 Save donation to Firestore
+// 🟡 حفظ التبرع في Firestore
 async function saveToFirestore(donation) {
   await db.collection("donations").add(donation);
 }
 
-// 📲 Send WhatsApp message
+// 🟢 إرسال رسالة واتساب
 async function sendWhatsappMessage(text) {
   const phone = "218926388438"; // رقم المندوب
-  const apikey = "7740180";     // 🔁 غيّرها بمفتاح CallMeBot الخاص بك
+  const apikey = "7740180";     // API Key الخاص بك من CallMeBot
   const url = `https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${encodeURIComponent(text)}&apikey=${apikey}`;
   await fetch(url);
 }
 
-// ✅ تأكيد الدفع عبر OTP
+// ✅ تأكيد الدفع
 app.post("/confirm", async (req, res) => {
   const { otp, sessionID, mosque, phone, quantity, location } = req.body;
 
@@ -70,15 +68,15 @@ app.post("/confirm", async (req, res) => {
       }
     );
 
+    console.log("📩 الرد الكامل من المصرف:\n", data);
+
     const parsed = await parseStringPromise(data);
     const result =
-      parsed["soap:Envelope"]["soap:Body"][0]["OnlineConfTransResponse"][0][
-        "OnlineConfTransResult"
-      ][0];
+      parsed["soap:Envelope"]["soap:Body"][0]["OnlineConfTransResponse"][0]["OnlineConfTransResult"][0];
 
-    console.log("🔁 نتيجة تأكيد:", result);
+    console.log("🎯 نتيجة التفسير:", result);
 
-    if (result === "OK") {
+    if (result.trim() === "OK") {
       const donation = {
         mosque,
         phone,
@@ -90,12 +88,12 @@ app.post("/confirm", async (req, res) => {
 
       await saveToFirestore(donation);
 
-      const msg = `📦 طلب سقيا مياه:\n🕌 المسجد: ${mosque}\n📞 المتبرع: ${phone}\n🧊 الكمية: ${quantity}\n📍 الموقع: ${location || "غير محدد"}`;
+      const msg = `📦 طلب سقيا مياه:\n🕌 المسجد: ${mosque}\n📞 المتبرع: ${phone}\n🧊 الكمية: ${quantity}\n📍 الموقع: ${location}`;
       await sendWhatsappMessage(msg);
 
-      return res.json({ success: true, message: "تم الدفع بنجاح" });
+      return res.json({ success: true, message: "✅ تم الدفع بنجاح" });
     } else {
-      return res.json({ success: false, message: "❌ الكود خطأ أو منتهي الصلاحية" });
+      return res.json({ success: false, message: `❌ الكود خطأ أو غير صالح. الرد: ${result}` });
     }
   } catch (error) {
     console.error("❌ خطأ في تأكيد الدفع:", error);
@@ -103,8 +101,6 @@ app.post("/confirm", async (req, res) => {
   }
 });
 
-// 🟢 تشغيل السيرفر
-const PORT = process.env.PORT || 5051;
-app.listen(PORT, () => {
-  console.log(`🚀 TDB Proxy server running on port ${PORT}`);
+app.listen(5051, () => {
+  console.log("🚀 TDB Proxy server running on port 5051");
 });
