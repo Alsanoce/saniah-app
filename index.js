@@ -25,6 +25,24 @@ async function saveToFirestore(donation) {
   await db.collection("donations").add(donation);
 }
 
+// 🔔 إشعار إداري يتم تسجيله دائمًا
+async function notifyAdmin({ mosque, phone, quantity, sessionID, status, note }) {
+  try {
+    await db.collection("admin_notifications").add({
+      mosque,
+      phone,
+      quantity,
+      sessionID,
+      status,
+      timestamp: new Date().toISOString(),
+      note
+    });
+    console.log("🟢 تم تسجيل إشعار إداري");
+  } catch (err) {
+    console.error("❌ فشل في تسجيل الإشعار الإداري:", err);
+  }
+}
+
 // 🟢 إرسال رسالة واتساب للمندوب عند نجاح الدفع
 async function sendWhatsappMessage({ mosque, phone, quantity, location }) {
   const mapsUrl = `https://www.google.com/maps?q=${location}`;
@@ -59,3 +77,78 @@ app.post("/confirm", async (req, res) => {
     const xml = `
       <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                      xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                     xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+        <soap:Body>
+          <OnlineConfTrans xmlns="http://tempuri.org/">
+            <Mobile>926388438</Mobile>
+            <Pin>${otp}</Pin>
+            <sessionID>${sessionID}</sessionID>
+            <PW>123@xdsr$#!!</PW>
+          </OnlineConfTrans>
+        </soap:Body>
+      </soap:Envelope>
+    `;
+
+    const { data } = await axios.post(
+      "http://62.240.55.2:6187/BCDUssd/newedfali.asmx",
+      xml,
+      {
+        headers: {
+          "Content-Type": "text/xml;charset=utf-8",
+          SOAPAction: "http://tempuri.org/OnlineConfTrans",
+        },
+      }
+    );
+
+    console.log("📩 الرد الكامل من المصرف:\n", data);
+
+    // 🔍 تحليل الرد
+    const parsed = await parseStringPromise(data);
+    const result =
+      parsed["soap:Envelope"]["soap:Body"][0]["OnlineConfTransResponse"][0]["OnlineConfTransResult"][0];
+
+    console.log("🎯 نتيجة التفسير:", result);
+
+    const status = result.trim() === "OK" ? "confirmed" : "failed";
+
+    // 📝 تسجيل العملية في Firestore
+    const donation = {
+      mosque,
+      phone,
+      quantity,
+      sessionID,
+      status,
+      timestamp: new Date().toISOString(),
+      location,
+    };
+
+    await saveToFirestore(donation);
+
+    // 🛎️ إشعار إداري
+    await notifyAdmin({
+      mosque,
+      phone,
+      quantity,
+      sessionID,
+      status,
+      note: status === "confirmed"
+        ? "تم الدفع بنجاح"
+        : "⚠️ الكود غير صحيح لكن قد يكون تم الخصم"
+    });
+
+    // ✅ إرسال واتساب فقط عند نجاح الدفع
+    if (status === "confirmed") {
+      await sendWhatsappMessage({ mosque, phone, quantity, location });
+      return res.json({ success: true, message: "✅ تم الدفع بنجاح" });
+    } else {
+      return res.json({ success: false, message: `❌ الكود خطأ أو غير صالح. الرد: ${result}` });
+    }
+  } catch (error) {
+    console.error("❌ خطأ في تأكيد الدفع:", error);
+    return res.status(500).json({ success: false, message: "خطأ في السيرفر" });
+  }
+});
+
+app.listen(5051, () => {
+  console.log("🚀 TDB Proxy server running on port 5051");
+});
