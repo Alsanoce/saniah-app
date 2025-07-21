@@ -1,85 +1,65 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import axios from "axios";
-const location = useLocation();
-const { phone, mosque, quantity, sessionID } = location.state;
+
 function OtpConfirmationPage() {
-  
   const [otp, setOtp] = useState("");
   const [status, setStatus] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [donationData, setDonationData] = useState(null);
 
-  const convertToEnglishDigits = (input) => {
-    const arabicDigits = ['٠','١','٢','٣','٤','٥','٦','٧','٨','٩'];
-    return input.replace(/[٠-٩]/g, d => arabicDigits.indexOf(d).toString());
-  };
-
-  const handleSubmit = async () => {
-    const cleanOtp = convertToEnglishDigits(otp.trim());
-
-    if (!cleanOtp || cleanOtp.length !== 4) {
-      setStatus("❗ يجب إدخال 4 أرقام صحيحة");
-      return;
+  useEffect(() => {
+    const data = localStorage.getItem("donation_data");
+    if (data) {
+      setDonationData(JSON.parse(data));
     }
+  }, []);
 
-    const donationData = JSON.parse(localStorage.getItem("donation_data"));
-    if (!donationData?.sessionID) {
-      setStatus("⚠️ لا توجد sessionID. يرجى المحاولة من جديد.");
+  const handleConfirm = async () => {
+    if (!otp || !donationData?.sessionID) {
+      setStatus("❌ البيانات غير مكتملة أو الكود غير مدخل");
       return;
     }
 
     try {
-      setLoading(true);
-
       const res = await axios.post("https://saniah-app.onrender.com/confirm", {
-  otp,
-  sessionID,
-  mosque,
-  phone,
-  quantity,
-  location,
-});
+        otp,
+        phone: donationData.phone,
+        quantity: donationData.quantity,
+        mosque: donationData.mosque,
+        sessionID: donationData.sessionID,
+      });
 
-      const result = res.data?.result;
-      console.log("🔁 نتيجة تأكيد:", result);
-
-      if (result === "PW") {
-        setStatus("❌ الكود خطأ أو منتهي الصلاحية");
-      } else if (result && result.includes("OK")) {
+      if (res.data.status === "OK") {
         setStatus("✅ تم الدفع بنجاح");
         localStorage.removeItem("donation_data");
       } else {
-        setStatus(`⚠️ نتيجة غير متوقعة: ${result}`);
+        setStatus("❌ الكود خطأ أو منتهي الصلاحية");
       }
     } catch (err) {
       console.error(err);
       setStatus("❌ فشل في الاتصال بالخادم");
-    } finally {
-      setLoading(false);
     }
   };
 
   return (
-    <div className="p-4 space-y-4 max-w-md mx-auto">
-      <h2 className="text-xl font-bold text-center">أدخل كود OTP</h2>
+    <div className="p-4 max-w-md mx-auto text-center">
+      <h2 className="text-xl font-bold mb-4">أدخل كود OTP</h2>
 
       <input
         type="text"
         maxLength={4}
-        placeholder="أدخل الكود من الرسالة"
-        className="border p-2 w-full text-center text-xl"
+        className="border p-2 w-full mb-2 text-center"
         value={otp}
         onChange={(e) => setOtp(e.target.value)}
       />
 
       <button
-        onClick={handleSubmit}
+        onClick={handleConfirm}
         className="bg-green-600 text-white px-4 py-2 rounded w-full"
-        disabled={loading}
       >
-        {loading ? "جارٍ التحقق..." : "تأكيد الدفع"}
+        تأكيد الدفع
       </button>
 
-      {status && <div className="mt-2 text-center">{status}</div>}
+      {status && <div className="mt-4">{status}</div>}
     </div>
   );
 }
