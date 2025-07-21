@@ -1,119 +1,99 @@
 const express = require("express");
-const cors = require("cors");
 const bodyParser = require("body-parser");
+const cors = require("cors");
 const axios = require("axios");
-const xml2js = require("xml2js");
+const { parseStringPromise } = require("xml2js");
 const admin = require("firebase-admin");
-const serviceAccount = require("./serviceAccountKey.json");
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
-const db = admin.firestore();
-
+const fetch = require("node-fetch");
 const app = express();
+
 app.use(cors());
 app.use(bodyParser.json());
 
-const BANK_URL = "http://62.240.55.2:6187/BCDUssd/newedfali.asmx";
-const BANK_MERCHANT = "926388438";
-const BANK_PIN = "2715";
-const BANK_PW = "123@xdsr$#!!";
+const serviceAccount = require("./serviceAccountKey.json");
 
-// 📥 PAY
-app.post("/pay", async (req, res) => {
-  const { customer, quantity, mosque = "غير محدد" } = req.body;
-  const amount = quantity * 6;
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+  });
+}
 
-  const xml = `
-<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-               xmlns:xsd="http://www.w3.org/2001/XMLSchema"
-               xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-    <DoPTrans xmlns="http://tempuri.org/">
-      <merchant>${BANK_MERCHANT}</merchant>
-      <Pin>${BANK_PIN}</Pin>
-      <customer>${customer}</customer>
-      <amount>${amount}</amount>
-      <ServiceID>2</ServiceID>
-      <PW>${BANK_PW}</PW>
-    </DoPTrans>
-  </soap:Body>
-</soap:Envelope>`;
+const db = admin.firestore();
 
-  try {
-    const bankRes = await axios.post(BANK_URL, xml, {
-      headers: {
-        "Content-Type": "text/xml; charset=utf-8",
-        SOAPAction: "http://tempuri.org/DoPTrans",
-      },
-    });
+// 🟡 حفظ التبرع في Firestore
+async function saveToFirestore(donation) {
+  await db.collection("donations").add(donation);
+}
 
-    const result = await xml2js.parseStringPromise(bankRes.data);
-    const sessionID =
-      result["soap:Envelope"]["soap:Body"][0]["DoPTransResponse"][0]["DoPTransResult"][0];
+// 🟢 إرسال رسالة واتساب
+async function sendWhatsappMessage(text) {
+  const phone = "218926388438"; // ← رقم المندوب
+  const apikey = "API_KEY";     // ← API من CallMeBot
+  const url = `https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${encodeURIComponent(text)}&apikey=${apikey}`;
+  await fetch(url);
+}
 
-    await db.collection("transactions").add({
-      mosque,
-      phone: customer,
-      quantity,
-      sessionID,
-      status: "pending",
-      method: "ادفع لي",
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    res.json({ sessionID });
-  } catch (err) {
-    console.error("❌ DoPTrans Error", err.message);
-    res.status(500).json({ error: "Failed to initiate payment" });
-  }
-});
-
-// 🔐 CONFIRM
+// ✅ تأكيد الدفع
 app.post("/confirm", async (req, res) => {
-  const { otp, sessionID } = req.body;
-
-  const xml = `
-<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-               xmlns:xsd="http://www.w3.org/2001/XMLSchema"
-               xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-    <OnlineConfTrans xmlns="http://tempuri.org/">
-      <Mobile>${BANK_MERCHANT}</Mobile>
-      <Pin>${otp}</Pin>
-      <sessionID>${sessionID}</sessionID>
-      <PW>${BANK_PW}</PW>
-    </OnlineConfTrans>
-  </soap:Body>
-</soap:Envelope>`;
+  const { otp, sessionID, mosque, phone, quantity, location } = req.body;
 
   try {
-    const bankRes = await axios.post(BANK_URL, xml, {
-      headers: {
-        "Content-Type": "text/xml; charset=utf-8",
-        SOAPAction: "http://tempuri.org/OnlineConfTrans",
-      },
-    });
+    const xml = `
+      <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                     xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                     xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+        <soap:Body>
+          <OnlineConfTrans xmlns="http://tempuri.org/">
+            <Mobile>926388438</Mobile>
+            <Pin>${otp}</Pin>
+            <sessionID>${sessionID}</sessionID>
+            <PW>123@xdsr$#!!</PW>
+          </OnlineConfTrans>
+        </soap:Body>
+      </soap:Envelope>
+    `;
 
-    const result = await xml2js.parseStringPromise(bankRes.data);
-    const resultText =
-      result["soap:Envelope"]["soap:Body"][0]["OnlineConfTransResponse"][0]["OnlineConfTransResult"][0];
-
-    const snapshot = await db
-      .collection("transactions")
-      .where("sessionID", "==", sessionID)
-      .limit(1)
-      .get();
-
-    snapshot.forEach((doc) =>
-      doc.ref.update({ status: resultText.includes("OK") ? "confirmed" : "failed" })
+    const { data } = await axios.post(
+      "http://62.240.55.2:6187/BCDUssd/newedfali.asmx",
+      xml,
+      {
+        headers: {
+          "Content-Type": "text/xml;charset=utf-8",
+          SOAPAction: "http://tempuri.org/OnlineConfTrans",
+        },
+      }
     );
 
-    res.json({ result: resultText });
-  } catch (err) {
-    console.error("❌ Confirm Error", err.message);
-    res.status(500).json({ error: "Failed to confirm payment" });
+    const parsed = await parseStringPromise(data);
+    const result =
+      parsed["soap:Envelope"]["soap:Body"][0]["OnlineConfTransResponse"][0][
+        "OnlineConfTransResult"
+      ][0];
+
+    console.log("🔁 نتيجة تأكيد:", result);
+
+    if (result === "OK") {
+      const donation = {
+        mosque,
+        phone,
+        quantity,
+        sessionID,
+        status: "confirmed",
+        timestamp: new Date().toISOString(),
+      };
+
+      await saveToFirestore(donation);
+
+      const msg = `📦 طلب سقيا مياه:\n🕌 المسجد: ${mosque}\n📞 المتبرع: ${phone}\n🧊 الكمية: ${quantity}\n📍 الموقع: ${location}`;
+      await sendWhatsappMessage(msg);
+
+      return res.json({ success: true, message: "تم الدفع بنجاح" });
+    } else {
+      return res.json({ success: false, message: "❌ الكود خطأ أو منتهي الصلاحية" });
+    }
+  } catch (error) {
+    console.error("❌ خطأ في تأكيد الدفع:", error);
+    return res.status(500).json({ success: false, message: "خطأ في السيرفر" });
   }
 });
 
