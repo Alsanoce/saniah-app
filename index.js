@@ -30,7 +30,7 @@ async function saveToFirestore(donation) {
 // 📲 Send WhatsApp message
 async function sendWhatsappMessage(text) {
   const phone = "218926388438"; // رقم المندوب
-  const apikey = "API_KEY";     // 🔁 غيّرها بمفتاح CallMeBot الخاص بك
+  const apikey = "7740180";     // 🔁 غيّرها بمفتاح CallMeBot الخاص بك
   const url = `https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${encodeURIComponent(text)}&apikey=${apikey}`;
   await fetch(url);
 }
