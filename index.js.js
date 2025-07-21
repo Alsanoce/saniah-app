@@ -38,7 +38,7 @@ app.post("/confirm", async (req, res) => {
   const { otp, sessionID, mosque, phone, quantity, location } = req.body;
 if (!otp || !sessionID) {
     return res.status(400).json({ error: "Missing OTP or sessionID" });
-  
+}
   try {
     const xml = `
       <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
