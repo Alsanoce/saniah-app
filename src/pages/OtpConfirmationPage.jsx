@@ -25,3 +25,6 @@ const handleConfirm = async () => {
     setStatus("❌ فشل في الاتصال بالخادم");
   }
 };
+
+// 🟢 لا تنسى هذا السطر في نهاية الملف
+export default OtpConfirmationPage;
