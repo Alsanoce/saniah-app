@@ -84,20 +84,20 @@ app.post("/confirm", async (req, res) => {
   }
 
   try {
-    const xml = \`
+    const xml = `
       <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                      xmlns:xsd="http://www.w3.org/2001/XMLSchema"
                      xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
         <soap:Body>
           <OnlineConfTrans xmlns="http://tempuri.org/">
             <Mobile>926388438</Mobile>
-            <Pin>\${otp}</Pin>
-            <sessionID>\${sessionID}</sessionID>
+            <Pin>${otp}</Pin>
+            <sessionID>${sessionID}</sessionID>
             <PW>123@xdsr$#!!</PW>
           </OnlineConfTrans>
         </soap:Body>
       </soap:Envelope>
-    \`;
+    `;
 
     const { data } = await axios.post(
       "http://62.240.55.2:6187/BCDUssd/newedfali.asmx",
@@ -110,14 +110,14 @@ app.post("/confirm", async (req, res) => {
       }
     );
 
-    console.log("📩 الرد الكامل من المصرف:
-", data);
-const parsed = await parseStringPromise(data);
-const result =
-  parsed["soap:Envelope"]["soap:Body"][0]["OnlineConfTransResponse"][0]["OnlineConfTransResult"][0];
+    console.log("📩 الرد الكامل من المصرف:\n", data);
 
-console.log("📌 القيمة الخام للرد:", JSON.stringify(result));
-const status = JSON.stringify(result).includes("OK") ? "confirmed" : "failed";
+    const parsed = await parseStringPromise(data);
+    const result =
+      parsed["soap:Envelope"]["soap:Body"][0]["OnlineConfTransResponse"][0]["OnlineConfTransResult"][0];
+
+    console.log("🎯 نتيجة التفسير:", result);
+    const status = JSON.stringify(result).includes("OK") ? "confirmed" : "failed";
 
     const donation = {
       mosque,
@@ -155,7 +155,7 @@ const status = JSON.stringify(result).includes("OK") ? "confirmed" : "failed";
     } else {
       return res.json({
         success: false,
-        message: \`⚠️ المصرف لم يؤكد الدفع. الرد: \${result}\`
+        message: `⚠️ المصرف لم يؤكد الدفع. الرد: ${result}`
       });
     }
   } catch (error) {
@@ -164,6 +164,7 @@ const status = JSON.stringify(result).includes("OK") ? "confirmed" : "failed";
   }
 });
 
-app.listen(5051, () => {
-  console.log("🚀 TDB Proxy server running on port 5051");
+const PORT = process.env.PORT || 5051;
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
