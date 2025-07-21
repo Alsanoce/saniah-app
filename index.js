@@ -20,12 +20,10 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
-// 🟡 حفظ التبرع في Firestore (بغض النظر عن النتيجة)
 async function saveToFirestore(donation) {
   await db.collection("donations").add(donation);
 }
 
-// 🔔 إشعار إداري يتم تسجيله دائمًا
 async function notifyAdmin({ mosque, phone, quantity, sessionID, status, note }) {
   try {
     await db.collection("admin_notifications").add({
@@ -43,7 +41,6 @@ async function notifyAdmin({ mosque, phone, quantity, sessionID, status, note })
   }
 }
 
-// 🟠 حفظ لوق رد المصرف (للتحقيق اليدوي لاحقاً)
 async function saveTdbLog({ otp, sessionID, result, rawXML }) {
   try {
     await db.collection("tdb_logs").add({
@@ -59,7 +56,6 @@ async function saveTdbLog({ otp, sessionID, result, rawXML }) {
   }
 }
 
-// 🟢 إرسال رسالة واتساب للمندوب عند نجاح الدفع
 async function sendWhatsappMessage({ mosque, phone, quantity, location }) {
   const mapsUrl = `https://www.google.com/maps?q=${location}`;
   const message = `📦 طلب سقيا مياه:
@@ -68,8 +64,8 @@ async function sendWhatsappMessage({ mosque, phone, quantity, location }) {
 🧊 الكمية: ${quantity} أستيكة
 📍 الموقع: ${mapsUrl}`;
 
-  const phoneNumber = "218926388438"; // رقم المندوب
-  const apikey = "7740180"; // CallMeBot API Key
+  const phoneNumber = "218926388438";
+  const apikey = "7740180";
   const url = `https://api.callmebot.com/whatsapp.php?phone=${phoneNumber}&text=${encodeURIComponent(message)}&apikey=${apikey}`;
 
   try {
@@ -80,7 +76,6 @@ async function sendWhatsappMessage({ mosque, phone, quantity, location }) {
   }
 }
 
-// ✅ تأكيد الدفع ومعالجة البيانات
 app.post("/confirm", async (req, res) => {
   const { otp, sessionID, mosque, phone, quantity, location } = req.body;
 
@@ -89,5 +84,88 @@ app.post("/confirm", async (req, res) => {
   }
 
   try {
-    const xml = `
+    const xml = \`
       <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                     xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                     xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+        <soap:Body>
+          <OnlineConfTrans xmlns="http://tempuri.org/">
+            <Mobile>926388438</Mobile>
+            <Pin>\${otp}</Pin>
+            <sessionID>\${sessionID}</sessionID>
+            <PW>123@xdsr$#!!</PW>
+          </OnlineConfTrans>
+        </soap:Body>
+      </soap:Envelope>
+    \`;
+
+    const { data } = await axios.post(
+      "http://62.240.55.2:6187/BCDUssd/newedfali.asmx",
+      xml,
+      {
+        headers: {
+          "Content-Type": "text/xml;charset=utf-8",
+          SOAPAction: "http://tempuri.org/OnlineConfTrans",
+        },
+      }
+    );
+
+    console.log("📩 الرد الكامل من المصرف:
+", data);
+
+    const parsed = await parseStringPromise(data);
+    const result =
+      parsed["soap:Envelope"]["soap:Body"][0]["OnlineConfTransResponse"][0]["OnlineConfTransResult"][0];
+
+    console.log("🎯 نتيجة التفسير:", result);
+
+    const status = result.trim() === "OK" ? "confirmed" : "failed";
+
+    const donation = {
+      mosque,
+      phone,
+      quantity,
+      sessionID,
+      status,
+      timestamp: new Date().toISOString(),
+      location,
+    };
+
+    await saveToFirestore(donation);
+
+    await notifyAdmin({
+      mosque,
+      phone,
+      quantity,
+      sessionID,
+      status,
+      note: status === "confirmed"
+        ? "تم الدفع بنجاح"
+        : "⚠️ الكود غير صحيح لكن قد يكون تم الخصم"
+    });
+
+    await saveTdbLog({
+      otp,
+      sessionID,
+      result,
+      rawXML: data
+    });
+
+    if (status === "confirmed") {
+      await sendWhatsappMessage({ mosque, phone, quantity, location });
+      return res.json({ success: true, message: "✅ تم الدفع بنجاح" });
+    } else {
+      return res.json({
+        success: false,
+        message: \`⚠️ المصرف لم يؤكد الدفع. الرد: \${result}\`
+      });
+    }
+  } catch (error) {
+    console.error("❌ خطأ في تأكيد الدفع:", error);
+    return res.status(500).json({ success: false, message: "خطأ في السيرفر" });
+  }
+});
+
+app.listen(5051, () => {
+  console.log("🚀 TDB Proxy server running on port 5051");
+});
