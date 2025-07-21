@@ -28,10 +28,14 @@ function OtpConfirmationPage() {
     try {
       setLoading(true);
 
-      const res = await axios.post("http://localhost:5051/confirm", {
-        otp: cleanOtp,
-        sessionID: donationData.sessionID,
-      });
+      const res = await axios.post("https://saniah-app.onrender.com/confirm", {
+  otp,
+  sessionID,
+  mosque,
+  phone,
+  quantity,
+  location,
+});
 
       const result = res.data?.result;
       console.log("🔁 نتيجة تأكيد:", result);
