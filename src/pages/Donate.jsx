@@ -44,7 +44,7 @@ function DonateForm() {
     }
 
     try {
-      const res = await axios.post("http://localhost:5051/pay", {
+      const res = await axios.post("https://saniah-app.onrender.com/pay", {
         customer: cleanedPhone,
         quantity: quantity,
       });
