@@ -37,6 +37,7 @@ async function notifyAdmin({ mosque, phone, quantity, sessionID, status, note })
       note,
       timestamp: new Date().toISOString(),
     });
+    console.log("🟢 تم تسجيل إشعار إداري");
   } catch (err) {
     console.error("❌ فشل في تسجيل الإشعار الإداري:", err);
   }
@@ -105,7 +106,9 @@ app.post("/pay", async (req, res) => {
 app.post("/confirm", async (req, res) => {
   const { otp, sessionID, mosque, phone, quantity, location } = req.body;
 
-  if (!otp || !sessionID) return res.status(400).json({ success: false, message: "بيانات ناقصة" });
+  if (!otp || !sessionID) {
+    return res.status(400).json({ success: false, message: "بيانات ناقصة" });
+  }
 
   const xml = `
     <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -122,37 +125,57 @@ app.post("/confirm", async (req, res) => {
     </soap:Envelope>`;
 
   try {
-    const response = await axios.post("http://62.240.55.2:6187/BCDUssd/newedfali.asmx", xml, {
-      headers: {
-        "Content-Type": "text/xml;charset=utf-8",
-        SOAPAction: "http://tempuri.org/OnlineConfTrans",
-      },
-    });
+    const response = await axios.post(
+      "http://62.240.55.2:6187/BCDUssd/newedfali.asmx",
+      xml,
+      {
+        headers: {
+          "Content-Type": "text/xml;charset=utf-8",
+          SOAPAction: "http://tempuri.org/OnlineConfTrans",
+        },
+      }
+    );
 
     const result = await parseStringPromise(response.data);
-    const status = result["soap:Envelope"]["soap:Body"][0]["OnlineConfTransResponse"][0]["OnlineConfTransResult"][0];
+    const status =
+      result["soap:Envelope"]["soap:Body"][0]["OnlineConfTransResponse"][0]["OnlineConfTransResult"][0];
+
     console.log("✅ رد المصرف:", status);
 
-    await notifyAdmin({
-      mosque,
-      phone,
-      quantity,
-      sessionID,
-      status,
-      note: status === "OK" ? "تم الدفع" : "فشل في الدفع",
-    });
-
-    if (status === "OK") {
-      await saveToFirestore({
+    // 🟢 إشعار إداري مهما كانت النتيجة
+    try {
+      await notifyAdmin({
         mosque,
         phone,
         quantity,
         sessionID,
-        status: "confirmed",
-        timestamp: new Date().toISOString(),
+        status,
+        note: status === "OK" ? "تم الدفع" : "فشل في الدفع",
       });
+    } catch (e) {
+      console.error("❌ notifyAdmin:", e.message);
+    }
 
-      await sendWhatsappMessage({ mosque, phone, quantity, location });
+    if (status === "OK") {
+      try {
+        await saveToFirestore({
+          mosque,
+          phone,
+          quantity,
+          sessionID,
+          status: "confirmed",
+          timestamp: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.error("❌ saveToFirestore:", e.message);
+      }
+
+      try {
+        await sendWhatsappMessage({ mosque, phone, quantity, location });
+      } catch (e) {
+        console.error("❌ sendWhatsappMessage:", e.message);
+      }
+
       return res.json({ success: true, message: "✅ تم الدفع بنجاح" });
     } else {
       return res.status(200).json({ success: false, message: "❌ الكود خطأ أو منتهي الصلاحية" });
