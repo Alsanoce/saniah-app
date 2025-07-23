@@ -47,8 +47,8 @@ async function notifyAdmin({ mosque, phone, quantity, sessionID, status, note })
 async function sendWhatsappMessage({ mosque, phone, quantity, location }) {
   const mapsUrl = `https://www.google.com/maps?q=${location}`;
   const message = `📦 طلب سقيا مياه:\n🕌 المسجد: ${mosque}\n📞 المتبرع: ${phone}\n🧊 الكمية: ${quantity} أستيكة\n📍 الموقع: ${mapsUrl}`;
-  const phoneNumber = "218926388438";
-  const apikey = "7740180";
+  const phoneNumber = "218915100403";
+  const apikey = "5562266";
   const url = `https://api.callmebot.com/whatsapp.php?phone=${phoneNumber}&text=${encodeURIComponent(message)}&apikey=${apikey}`;
   try {
     await fetch(url);
