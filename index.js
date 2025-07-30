@@ -7,7 +7,7 @@ const admin = require("firebase-admin");
 const fetch = require("node-fetch");
 
 const app = express();
-app.use(cors());
+app.use(cors({   origin: ['https://saniah.ly'], // دومين موقعك فقط   methods: ['GET', 'POST'],   allowedHeaders: ['Content-Type'], }));
 app.use(bodyParser.json());
 
 const serviceAccount = require("./serviceAccountKey.json");
