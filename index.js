@@ -8,13 +8,13 @@ const fetch = require("node-fetch");
 
 const app = express();
 
-// ✅ إعدادات CORS الصحيحة
-const corsOptions = {
+// ✅ إعداد CORS الصحيح (لا تستخدم app.use(cors()) مرتين)
+app.use(cors({
   origin: 'https://saniah.ly',
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type'],
-};
-app.use(cors(corsOptions));
+}));
+
 app.use(bodyParser.json());
 
 const serviceAccount = require("./serviceAccountKey.json");
@@ -144,8 +144,7 @@ app.post("/confirm", async (req, res) => {
     );
 
     const result = await parseStringPromise(response.data);
-    const status =
-      result["soap:Envelope"]["soap:Body"][0]["OnlineConfTransResponse"][0]["OnlineConfTransResult"][0];
+    const status = result["soap:Envelope"]["soap:Body"][0]["OnlineConfTransResponse"][0]["OnlineConfTransResult"][0];
 
     console.log("✅ رد المصرف:", status);
 
@@ -180,6 +179,7 @@ app.post("/confirm", async (req, res) => {
   }
 });
 
+// 🟢 تشغيل السيرفر
 app.listen(3000, '0.0.0.0', () => {
   console.log("🚀 API شغال على http://0.0.0.0:3000");
 });
