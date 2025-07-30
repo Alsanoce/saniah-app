@@ -7,12 +7,14 @@ const admin = require("firebase-admin");
 const fetch = require("node-fetch");
 
 const app = express();
-app.use(cors({
+
+// ✅ إعدادات CORS الصحيحة
+const corsOptions = {
   origin: 'https://saniah.ly',
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type'],
-  credentials: false
-}));
+};
+app.use(cors(corsOptions));
 app.use(bodyParser.json());
 
 const serviceAccount = require("./serviceAccountKey.json");
@@ -71,7 +73,7 @@ app.post("/pay", async (req, res) => {
     return res.status(400).json({ success: false, message: "بيانات ناقصة" });
   }
 
-  const amount = (Number(quantity) * 6).toFixed(2); // ← عدل سعر الأستيكة حسب المطلوب
+  const amount = (Number(quantity) * 6).toFixed(2);
 
   const xml = `
     <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -147,39 +149,26 @@ app.post("/confirm", async (req, res) => {
 
     console.log("✅ رد المصرف:", status);
 
-    // 🟢 إشعار إداري مهما كانت النتيجة
-    try {
-      await notifyAdmin({
+    await notifyAdmin({
+      mosque,
+      phone,
+      quantity,
+      sessionID,
+      status,
+      note: status === "OK" ? "تم الدفع" : "فشل في الدفع",
+    });
+
+    if (status === "OK") {
+      await saveToFirestore({
         mosque,
         phone,
         quantity,
         sessionID,
-        status,
-        note: status === "OK" ? "تم الدفع" : "فشل في الدفع",
+        status: "confirmed",
+        timestamp: new Date().toISOString(),
       });
-    } catch (e) {
-      console.error("❌ notifyAdmin:", e.message);
-    }
 
-    if (status === "OK") {
-      try {
-        await saveToFirestore({
-          mosque,
-          phone,
-          quantity,
-          sessionID,
-          status: "confirmed",
-          timestamp: new Date().toISOString(),
-        });
-      } catch (e) {
-        console.error("❌ saveToFirestore:", e.message);
-      }
-
-      try {
-        await sendWhatsappMessage({ mosque, phone, quantity, location });
-      } catch (e) {
-        console.error("❌ sendWhatsappMessage:", e.message);
-      }
+      await sendWhatsappMessage({ mosque, phone, quantity, location });
 
       return res.json({ success: true, message: "✅ تم الدفع بنجاح" });
     } else {
