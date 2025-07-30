@@ -186,6 +186,6 @@ app.post("/confirm", async (req, res) => {
   }
 });
 
-app.listen(3000, () => {
-  console.log("🚀 API شغال على http://localhost:3000");
+app.listen(3000, '0.0.0.0', () => {
+  console.log("🚀 API شغال على http://0.0.0.0:3000");
 });
