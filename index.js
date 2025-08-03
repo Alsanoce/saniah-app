@@ -8,7 +8,6 @@ const fetch = require("node-fetch");
 
 const app = express();
 
-// ✅ إعداد CORS الصحيح (لا تستخدم app.use(cors()) مرتين)
 app.use(cors({
   origin: 'https://saniah.ly',
   methods: ['GET', 'POST'],
@@ -28,12 +27,10 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
-// 🟡 حفظ التبرع في Firestore
 async function saveToFirestore(donation) {
   await db.collection("donations").add(donation);
 }
 
-// 🔔 إشعار إداري دائم
 async function notifyAdmin({ mosque, phone, quantity, sessionID, status, note }) {
   try {
     await db.collection("admin_notifications").add({
@@ -51,7 +48,6 @@ async function notifyAdmin({ mosque, phone, quantity, sessionID, status, note })
   }
 }
 
-// 🟢 إرسال واتساب للمندوب
 async function sendWhatsappMessage({ mosque, phone, quantity, location }) {
   const mapsUrl = `https://www.google.com/maps?q=${location}`;
   const message = `📦 طلب سقيا مياه:\n🕌 المسجد: ${mosque}\n📞 المتبرع: ${phone}\n🧊 الكمية: ${quantity} أستيكة\n📍 الموقع: ${mapsUrl}`;
@@ -66,7 +62,7 @@ async function sendWhatsappMessage({ mosque, phone, quantity, location }) {
   }
 }
 
-// ✅ تنفيذ DoPTrans - إرسال كود التفعيل
+// ✅ إرسال كود التفعيل
 app.post("/pay", async (req, res) => {
   const { customer, quantity } = req.body;
 
@@ -74,7 +70,7 @@ app.post("/pay", async (req, res) => {
     return res.status(400).json({ success: false, message: "بيانات ناقصة" });
   }
 
-  const amount = (Number(quantity) * 6).toFixed(2);
+  const amount = (Number(quantity) * 6).toFixed(2); // سعر الأستيكة = 6 دينار
 
   const xml = `
     <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -84,7 +80,7 @@ app.post("/pay", async (req, res) => {
         <DoPTrans xmlns="http://tempuri.org/">
           <Mobile>926388438</Mobile>
           <Pin>2715</Pin>
-          <Cmobile>${customer}</Cmobile>
+          <Cmobile>${customer}</Cmobile> <!-- ✅ لا نكرر +218 -->
           <Amount>${amount}</Amount>
           <PW>123@xdsr$#!!</PW>
         </DoPTrans>
@@ -110,7 +106,7 @@ app.post("/pay", async (req, res) => {
   }
 });
 
-// ✅ تأكيد الدفع OnlineConfTrans
+// ✅ تأكيد الدفع
 app.post("/confirm", async (req, res) => {
   const { otp, sessionID, mosque, phone, quantity, location } = req.body;
 
