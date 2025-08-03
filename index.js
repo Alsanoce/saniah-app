@@ -7,14 +7,12 @@ const admin = require("firebase-admin");
 const fetch = require("node-fetch");
 
 const app = express();
-
 app.use(cors({
   origin: 'https://saniah.ly',
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type'],
 }));
 app.options('*', cors());
-
 app.use(bodyParser.json());
 
 const serviceAccount = require("./serviceAccountKey.json");
@@ -62,15 +60,13 @@ async function sendWhatsappMessage({ mosque, phone, quantity, location }) {
   }
 }
 
-// ✅ إرسال كود التفعيل
+// ⬇️ عملية الدفع DoPTrans
 app.post("/pay", async (req, res) => {
-  const { customer, quantity } = req.body;
+  const { customer, amount, mosque, quantity } = req.body;
 
-  if (!customer || !quantity) {
+  if (!customer || !amount || !quantity) {
     return res.status(400).json({ success: false, message: "بيانات ناقصة" });
   }
-
-  const amount = (Number(quantity) * 6).toFixed(2); // سعر الأستيكة = 6 دينار
 
   const xml = `
     <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -80,8 +76,8 @@ app.post("/pay", async (req, res) => {
         <DoPTrans xmlns="http://tempuri.org/">
           <Mobile>926388438</Mobile>
           <Pin>2715</Pin>
-          <Cmobile>${customer}</Cmobile> <!-- ✅ لا نكرر +218 -->
-          <Amount>${amount}</Amount>
+          <Cmobile>${customer}</Cmobile>
+          <Amount>${Number(amount).toFixed(2)}</Amount>
           <PW>123@xdsr$#!!</PW>
         </DoPTrans>
       </soap:Body>
@@ -106,7 +102,7 @@ app.post("/pay", async (req, res) => {
   }
 });
 
-// ✅ تأكيد الدفع
+// ⬇️ تأكيد الدفع OnlineConfTrans
 app.post("/confirm", async (req, res) => {
   const { otp, sessionID, mosque, phone, quantity, location } = req.body;
 
@@ -176,7 +172,6 @@ app.post("/confirm", async (req, res) => {
   }
 });
 
-// 🟢 تشغيل السيرفر
 app.listen(3000, '0.0.0.0', () => {
   console.log("🚀 API شغال على http://0.0.0.0:3000");
 });
