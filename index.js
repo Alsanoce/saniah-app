@@ -84,7 +84,7 @@ app.post("/pay", async (req, res) => {
         <DoPTrans xmlns="http://tempuri.org/">
           <Mobile>926388438</Mobile>
           <Pin>2715</Pin>
-          <Cmobile>+218${customer}</Cmobile>
+          <Cmobile>${customer}</Cmobile>
           <Amount>${amount}</Amount>
           <PW>123@xdsr$#!!</PW>
         </DoPTrans>
