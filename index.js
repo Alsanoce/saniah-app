@@ -6,6 +6,7 @@ const { parseStringPromise } = require("xml2js");
 
 const app = express();
 
+// CORS Configuration
 app.use(cors({
   origin: 'https://saniah.ly',
   methods: ['GET', 'POST'],
@@ -14,17 +15,23 @@ app.use(cors({
 app.options('*', cors());
 
 app.use(bodyParser.json());
-app.post("/pay", async (req, res) => {
-  const { customer, amount, mosque } = req.body;
 
-  if (!customer || !amount || !mosque) {
+// Payment Endpoint
+app.post("/pay", async (req, res) => {
+  const { customer, amount, mosque, quantity } = req.body;
+
+  // Input Validation
+  if (!customer || !amount || !mosque || !quantity) {
     return res.status(400).json({ success: false, message: "بيانات ناقصة" });
   }
 
-  // 🛠️ إزالة +218 إن وجدت
-  const rawNumber = customer.replace('+218', '').trim();
-  const cmobile = `218${rawNumber}`;  // بدون +
+  // Format Phone Number (Keep +218)
+  const rawNumber = customer.replace(/\D/g, ""); // Remove all non-digits
+  const cmobile = `+218${rawNumber.slice(-9)}`; // Ensure +218 + 9 digits
 
+  console.log("📤 Request Data:", { customer, cmobile, amount, mosque, quantity });
+
+  // SOAP XML Request
   const xml = `
     <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
@@ -40,9 +47,8 @@ app.post("/pay", async (req, res) => {
       </soap:Body>
     </soap:Envelope>`;
 
-  console.log("📤 XML المرسل:\n", xml); // 🪵 لوغ للتأكد
-
   try {
+    // Send Request to Bank API
     const { data } = await axios.post("http://62.240.55.2:6187/BCDUssd/newedfali.asmx", xml, {
       headers: {
         "Content-Type": "text/xml; charset=utf-8",
@@ -50,18 +56,49 @@ app.post("/pay", async (req, res) => {
       }
     });
 
+    // Parse XML Response
     const result = await parseStringPromise(data);
     const sessionID = result["soap:Envelope"]["soap:Body"][0]["DoPTransResponse"][0]["DoPTransResult"][0];
 
-    console.log("📩 sessionID:", sessionID);
-    res.json({ success: true, sessionID });
+    console.log("✅ Payment Success - SessionID:", sessionID);
+
+    // Handle Bank Response Codes
+    if (sessionID === "BAL") {
+      return res.status(400).json({ success: false, message: "رصيد غير كافي" });
+    }
+    if (sessionID === "ACC") {
+      return res.status(400).json({ success: false, message: "رقم الهاتف غير مفعل" });
+    }
+    if (!sessionID || sessionID.length < 10) {
+      return res.status(500).json({ success: false, message: "استجابة غير متوقعة من المصرف" });
+    }
+
+    // Success Response
+    res.json({ 
+      success: true, 
+      sessionID,
+      bankResponse: result 
+    });
 
   } catch (err) {
-    console.error("❌ فشل /pay:", err.message);
-    res.status(500).json({ success: false, message: "فشل في العملية" });
+    console.error("❌ Payment Failed:", err.message);
+    
+    // Handle Specific Errors
+    if (err.response?.data?.includes("BAL")) {
+      res.status(400).json({ success: false, message: "رصيد غير كافي" });
+    } else if (err.response?.data?.includes("ACC")) {
+      res.status(400).json({ success: false, message: "رقم الهاتف غير مفعل أو غير مسجل" });
+    } else {
+      res.status(500).json({ 
+        success: false, 
+        message: "فشل في عملية الدفع",
+        error: err.message 
+      });
+    }
   }
 });
 
+// Start Server
 app.listen(3000, '0.0.0.0', () => {
-  console.log("🚀 API شغال على http://0.0.0.0:3000");
+  console.log("🚀 Server running on http://0.0.0.0:3000");
 });
