@@ -1,7 +1,7 @@
 const axios = require("axios");
 const { parseStringPromise } = require("xml2js");
 
-const customer = "218926388438"; // ✅ رقم الزبون بصيغة صحيحة (بدون +)
+const customer = "218913798283"; // ✅ رقم الزبون بصيغة صحيحة (بدون +)
 const amount = "12.00"; // أو أي مبلغ حسب عدد الأستيكات
 
 const xml = `
