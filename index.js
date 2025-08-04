@@ -14,7 +14,6 @@ app.use(cors({
 app.options('*', cors());
 
 app.use(bodyParser.json());
-
 app.post("/pay", async (req, res) => {
   const { customer, amount, mosque } = req.body;
 
@@ -22,13 +21,9 @@ app.post("/pay", async (req, res) => {
     return res.status(400).json({ success: false, message: "بيانات ناقصة" });
   }
 
-  // إزالة + إن وجد
-  const cleanedCustomer = customer.startsWith('+') ? customer.replace('+', '') : customer;
-
-  // طباعة البيانات التي ستُرسل
-  console.log("🚀 الرقم المُرسل:", cleanedCustomer);
-  console.log("🚀 القيمة:", amount);
-  console.log("🚀 المسجد:", mosque);
+  // 🛠️ إزالة +218 إن وجدت
+  const rawNumber = customer.replace('+218', '').trim();
+  const cmobile = `218${rawNumber}`;  // بدون +
 
   const xml = `
     <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -38,41 +33,32 @@ app.post("/pay", async (req, res) => {
         <DoPTrans xmlns="http://tempuri.org/">
           <Mobile>926388438</Mobile>
           <Pin>2715</Pin>
-          <Cmobile>218${cleanedCustomer.replace('+218', '')}</Cmobile>
+          <Cmobile>${cmobile}</Cmobile>
           <Amount>${amount}</Amount>
           <PW>123@xdsr$#!!</PW>
         </DoPTrans>
       </soap:Body>
     </soap:Envelope>`;
-    console.log("📤 XML المُرسل:\n", xml);
+
+  console.log("📤 XML المرسل:\n", xml); // 🪵 لوغ للتأكد
 
   try {
     const { data } = await axios.post("http://62.240.55.2:6187/BCDUssd/newedfali.asmx", xml, {
       headers: {
         "Content-Type": "text/xml; charset=utf-8",
-        SOAPAction: "http://tempuri.org/DoPTrans",
-      },
+        SOAPAction: "http://tempuri.org/DoPTrans"
+      }
     });
 
     const result = await parseStringPromise(data);
     const sessionID = result["soap:Envelope"]["soap:Body"][0]["DoPTransResponse"][0]["DoPTransResult"][0];
 
     console.log("📩 sessionID:", sessionID);
-
-    if (sessionID === "ACC") {
-      console.warn("⚠️ الرقم غير مفعل:", cleanedCustomer);
-      return res.json({ success: false, sessionID, message: "❌ الرقم غير مفعل في خدمة الدفع" });
-    }
-
-    if (sessionID === "BAL") {
-      return res.json({ success: false, sessionID, message: "❌ الرصيد غير كافي لإتمام العملية" });
-    }
-
     res.json({ success: true, sessionID });
 
   } catch (err) {
     console.error("❌ فشل /pay:", err.message);
-    return res.status(500).json({ success: false, message: "فشل في العملية" });
+    res.status(500).json({ success: false, message: "فشل في العملية" });
   }
 });
 
