@@ -1,141 +1,140 @@
 
-// ✅ DonateForm.jsx (Front-end)
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import { collection, getDocs } from "firebase/firestore";
-import { db } from "../firebase";
-import axios from "axios";
+// ✅ DonateForm.jsx (Front-end1)
+const express = require('express');
+const axios = require('axios');
+const { parseStringPromise } = require('xml2js');
+const app = express();
 
-export default function DonateForm() {
-  const [phone, setPhone] = useState("+218");
-  const [quantity, setQuantity] = useState(1);
-  const [status, setStatus] = useState(null);
-  const [mosques, setMosques] = useState([]);
-  const [selectedMosque, setSelectedMosque] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const navigate = useNavigate();
-  const pricePerStick = 6;
+app.use(express.json());
 
-  useEffect(() => {
-    const fetchMosques = async () => {
-      try {
-        const snapshot = await getDocs(collection(db, "mosques"));
-        const mosquesList = snapshot.docs.map(doc => ({
-          id: doc.id,
-          name: doc.data().name,
-        }));
-        setMosques(mosquesList);
-      } catch (error) {
-        console.error("خطأ في جلب المساجد:", error);
-        setStatus("❌ فشل تحميل قائمة المساجد");
-      }
-    };
+// ⚠️ يجب استبدال هذه القيم من متغيرات البيئة
+const BANK_PW = "123@xdsr$#!!";
+const BANK_URL = "http://62.240.55.2:6187/BCDUssd/newedfali.asmx";
 
-    fetchMosques();
-  }, []);
+// نقطة نهاية الدفع
+app.post('/pay', async (req, res) => {
+  const { customer, amount, mosque, quantity } = req.body;
 
-  const handleDonate = async () => {
-    if (isLoading) return;
-
-    const cleanedPhone = phone.trim(); // ⚠️ تأكد أن المستخدم يدخل +218 بنفسه
+  try {
+    // 1. تنظيف رقم الهاتف
+    let phone = customer.replace(/\s/g, "");
+    
+    // 2. التحقق من صحة التنسيق
     const phoneRegex = /^\+2189\d{8}$/;
-
-    if (!selectedMosque || !phoneRegex.test(cleanedPhone)) {
-      setStatus("❗ تأكد من تعبئة البيانات بشكل صحيح");
-      return;
+    if (!phoneRegex.test(phone)) {
+      return res.status(400).json({ error: "رقم الهاتف غير صحيح" });
     }
 
-    const amount = quantity * pricePerStick;
-    setIsLoading(true);
-    setStatus(null);
+    // 3. إنشاء طلب SOAP للمصرف
+    const xml = `
+    <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                   xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+      <soap:Body>
+        <DoPTrans xmlns="http://tempuri.org/">
+          <Mobile>${phone}</Mobile>
+          <Pin>0000</Pin> <!-- سيتم استبداله لاحقاً بـ OTP -->
+          <Cmobile>${phone}</Cmobile>
+          <Amount>${amount}</Amount>
+          <PW>${BANK_PW}</PW>
+        </DoPTrans>
+      </soap:Body>
+    </soap:Envelope>`;
 
-    try {
-      console.log("📤 إرسال:", { customer: cleanedPhone, amount, mosque: selectedMosque, quantity });
-      const response = await axios.post("https://api.saniah.ly/pay", {
-        customer: cleanedPhone,
-        amount,
-        mosque: selectedMosque,
-        quantity,
-      });
-
-      const sessionID = (response.data.sessionID || "").toString().trim();
-
-      if (!sessionID || sessionID.length < 10) {
-        setStatus("❌ استجابة غير متوقعة من المصرف");
-        return;
+    // 4. إرسال الطلب للمصرف
+    const response = await axios.post(BANK_URL, xml, {
+      headers: {
+        "Content-Type": "text/xml; charset=utf-8",
+        SOAPAction: "http://tempuri.org/DoPTrans"
       }
+    });
 
-      navigate("/confirm", {
-        state: {
-          phone: cleanedPhone,
-          quantity,
-          mosque: selectedMosque,
-          sessionID,
-        },
-      });
-
-    } catch (error) {
-      console.error("❌ فشل:", error);
-      setStatus("❌ فشل في إتمام العملية، الرجاء المحاولة لاحقًا");
-    } finally {
-      setIsLoading(false);
+    // 5. معالجة الرد من المصرف
+    const parsed = await parseStringPromise(response.data);
+    const sessionID = parsed['soap:Envelope']['soap:Body'][0]['DoPTransResponse'][0]['DoPTransResult'][0];
+    
+    // 6. التحقق من صحة sessionID
+    if (!sessionID || sessionID.length < 10) {
+      return res.status(500).json({ error: "فشل في الحصول على معرف الجلسة من المصرف" });
     }
-  };
 
-  return (
-    <div className="p-4 max-w-md mx-auto">
-      <h1 className="text-2xl font-bold text-center mb-6">نموذج التبرع</h1>
+    // 7. تخزين معلومات الجلسة في قاعدة البيانات (يجب تطبيق هذا)
+    // saveSessionToDB(sessionID, phone, amount, mosque, quantity);
 
-      <div className="space-y-4">
-        <div>
-          <label className="block mb-1">اختر المسجد:</label>
-          <select
-            className="w-full p-2 border rounded"
-            value={selectedMosque}
-            onChange={(e) => setSelectedMosque(e.target.value)}
-            disabled={isLoading}
-          >
-            <option value="">-- اختر مسجد --</option>
-            {mosques.map((mosque) => (
-              <option key={mosque.id} value={mosque.name}>{mosque.name}</option>
-            ))}
-          </select>
-        </div>
+    // 8. إرجاع الاستجابة للفرونت إند
+    res.json({ sessionID });
 
-        <div>
-          <label className="block mb-1">رقم الهاتف (+2189...):</label>
-          <input
-            type="tel"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            className="w-full p-2 border rounded"
-            disabled={isLoading}
-          />
-        </div>
+  } catch (error) {
+    console.error("❌ خطأ في الباك إند:", error);
+    
+    // تحسين رسائل الخطأ
+    let errorMessage = "فشل في الاتصال بالمصرف";
+    
+    if (error.response) {
+      console.error("رد المصرف:", error.response.data);
+      
+      // محاولة استخراج رسالة الخطأ من XML
+      if (error.response.data.includes('<faultstring>')) {
+        const faultMatch = error.response.data.match(/<faultstring>([^<]+)<\/faultstring>/);
+        if (faultMatch) {
+          errorMessage = `خطأ من المصرف: ${faultMatch[1]}`;
+        }
+      }
+    }
+    
+    res.status(500).json({ error: errorMessage });
+  }
+});
 
-        <div>
-          <label className="block mb-1">عدد الأستيكات:</label>
-          <input
-            type="number"
-            value={quantity}
-            min={1}
-            max={50}
-            onChange={(e) => setQuantity(Number(e.target.value))}
-            className="w-full p-2 border rounded"
-            disabled={isLoading}
-          />
-        </div>
+// نقطة نهاية لتأكيد الدفع
+app.post('/confirm', async (req, res) => {
+  const { sessionID, otp, phone } = req.body;
 
-        <button
-          onClick={handleDonate}
-          disabled={isLoading}
-          className={`w-full py-2 rounded text-white ${isLoading ? "bg-gray-400" : "bg-green-600 hover:bg-green-700"}`}
-        >
-          {isLoading ? "جاري المعالجة..." : "التبرع الآن"}
-        </button>
+  try {
+    // 1. إنشاء طلب SOAP لتأكيد الدفع
+    const xml = `
+    <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                   xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+      <soap:Body>
+        <OnlineConfTrans xmlns="http://tempuri.org/">
+          <Mobile>${phone}</Mobile>
+          <Pin>${otp}</Pin>
+          <sessionID>${sessionID}</sessionID>
+          <PW>${BANK_PW}</PW>
+        </OnlineConfTrans>
+      </soap:Body>
+    </soap:Envelope>`;
 
-        {status && <div className="p-2 text-center bg-red-100 text-red-700 rounded">{status}</div>}
-      </div>
-    </div>
-  );
-}
+    // 2. إرسال طلب التأكيد للمصرف
+    const response = await axios.post(BANK_URL, xml, {
+      headers: {
+        "Content-Type": "text/xml; charset=utf-8",
+        SOAPAction: "http://tempuri.org/OnlineConfTrans"
+      }
+    });
+
+    // 3. معالجة الرد من المصرف
+    const parsed = await parseStringPromise(response.data);
+    const result = parsed['soap:Envelope']['soap:Body'][0]['OnlineConfTransResponse'][0]['OnlineConfTransResult'][0];
+    
+    // 4. التحقق من نجاح العملية
+    if (result.toLowerCase().includes('success')) {
+      // تحديث حالة الدفع في قاعدة البيانات (يجب تطبيق هذا)
+      // updatePaymentStatus(sessionID, 'success');
+      return res.json({ success: true, message: "تمت العملية بنجاح" });
+    } else {
+      return res.status(400).json({ error: result });
+    }
+
+  } catch (error) {
+    console.error("❌ خطأ في تأكيد الدفع:", error);
+    res.status(500).json({ error: "فشل في تأكيد الدفع" });
+  }
+});
+
+// بدء الخادم
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`✅ الخادم يعمل على المنفذ ${PORT}`);
+});
