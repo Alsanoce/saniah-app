@@ -1,3 +1,4 @@
+// ✅ index.js (Back-end)
 const express = require("express");
 const bodyParser = require("body-parser");
 const cors = require("cors");
@@ -6,17 +7,16 @@ const { parseStringPromise } = require("xml2js");
 
 const app = express();
 
-// ✅ إعداد CORS الصحيح
 app.use(cors({
   origin: 'https://saniah.ly',
   methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type'],
+  allowedHeaders: ['Content-Type']
 }));
 app.options('*', cors());
 
 app.use(bodyParser.json());
 
-// ✅ نقطة الدفع
+// 🚀 الدفع
 app.post("/pay", async (req, res) => {
   const { customer, amount, mosque, quantity } = req.body;
 
@@ -24,10 +24,8 @@ app.post("/pay", async (req, res) => {
     return res.status(400).json({ success: false, message: "بيانات ناقصة" });
   }
 
-  // ⚠️ لا نعدل الرقم، نستخدمه كما هو (مثل test-pay.js)
-  const cmobile = customer;
-
-  console.log("📤 إرسال إلى المصرف:", { cmobile, amount, mosque });
+  const cmobile = customer.trim(); // ⚠️ بدون تعديل
+  console.log("📤 إرسال إلى المصرف:", cmobile);
 
   const xml = `
     <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -56,30 +54,14 @@ app.post("/pay", async (req, res) => {
     const sessionID = result["soap:Envelope"]["soap:Body"][0]["DoPTransResponse"][0]["DoPTransResult"][0];
 
     console.log("✅ sessionID:", sessionID);
-
-    // الرد حسب حالة المصرف
-    if (sessionID === "BAL") {
-      return res.status(400).json({ success: false, message: "رصيد غير كافي" });
-    }
-
-    if (sessionID === "ACC") {
-      return res.status(400).json({ success: false, message: "رقم الهاتف غير مفعل بالخدمة" });
-    }
-
-    if (!sessionID || sessionID.length < 10) {
-      return res.status(500).json({ success: false, message: "استجابة غير متوقعة من المصرف" });
-    }
-
-    // ✅ نجاح
     res.json({ success: true, sessionID });
 
   } catch (err) {
     console.error("❌ فشل الاتصال بالمصرف:", err.message);
-    return res.status(500).json({ success: false, message: "خطأ في الاتصال بالمصرف", error: err.message });
+    res.status(500).json({ success: false, message: "فشل في عملية الدفع" });
   }
 });
 
-// ✅ تشغيل الخادم
 app.listen(3000, '0.0.0.0', () => {
-  console.log("🚀 الخادم يعمل على http://0.0.0.0:3000");
+  console.log("🚀 Server running on http://0.0.0.0:3000");
 });
