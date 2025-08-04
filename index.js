@@ -1,67 +1,141 @@
-// ✅ index.js (Back-end)
-const express = require("express");
-const bodyParser = require("body-parser");
-const cors = require("cors");
-const axios = require("axios");
-const { parseStringPromise } = require("xml2js");
 
-const app = express();
+// ✅ DonateForm.jsx (Front-end)
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { collection, getDocs } from "firebase/firestore";
+import { db } from "../firebase";
+import axios from "axios";
 
-app.use(cors({
-  origin: 'https://saniah.ly',
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type']
-}));
-app.options('*', cors());
+export default function DonateForm() {
+  const [phone, setPhone] = useState("+218");
+  const [quantity, setQuantity] = useState(1);
+  const [status, setStatus] = useState(null);
+  const [mosques, setMosques] = useState([]);
+  const [selectedMosque, setSelectedMosque] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const navigate = useNavigate();
+  const pricePerStick = 6;
 
-app.use(bodyParser.json());
-
-// 🚀 الدفع
-app.post("/pay", async (req, res) => {
-  const { customer, amount, mosque, quantity } = req.body;
-
-  if (!customer || !amount || !mosque || !quantity) {
-    return res.status(400).json({ success: false, message: "بيانات ناقصة" });
-  }
-
-  const cmobile = customer.trim(); // ⚠️ بدون تعديل
-  console.log("📤 إرسال إلى المصرف:", cmobile);
-
-  const xml = `
-    <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                   xmlns:xsd="http://www.w3.org/2001/XMLSchema"
-                   xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-      <soap:Body>
-        <DoPTrans xmlns="http://tempuri.org/">
-          <Mobile>926388438</Mobile>
-          <Pin>2715</Pin>
-          <Cmobile>${cmobile}</Cmobile>
-          <Amount>${amount}</Amount>
-          <PW>123@xdsr$#!!</PW>
-        </DoPTrans>
-      </soap:Body>
-    </soap:Envelope>`;
-
-  try {
-    const { data } = await axios.post("http://62.240.55.2:6187/BCDUssd/newedfali.asmx", xml, {
-      headers: {
-        "Content-Type": "text/xml; charset=utf-8",
-        SOAPAction: "http://tempuri.org/DoPTrans"
+  useEffect(() => {
+    const fetchMosques = async () => {
+      try {
+        const snapshot = await getDocs(collection(db, "mosques"));
+        const mosquesList = snapshot.docs.map(doc => ({
+          id: doc.id,
+          name: doc.data().name,
+        }));
+        setMosques(mosquesList);
+      } catch (error) {
+        console.error("خطأ في جلب المساجد:", error);
+        setStatus("❌ فشل تحميل قائمة المساجد");
       }
-    });
+    };
 
-    const result = await parseStringPromise(data);
-    const sessionID = result["soap:Envelope"]["soap:Body"][0]["DoPTransResponse"][0]["DoPTransResult"][0];
+    fetchMosques();
+  }, []);
 
-    console.log("✅ sessionID:", sessionID);
-    res.json({ success: true, sessionID });
+  const handleDonate = async () => {
+    if (isLoading) return;
 
-  } catch (err) {
-    console.error("❌ فشل الاتصال بالمصرف:", err.message);
-    res.status(500).json({ success: false, message: "فشل في عملية الدفع" });
-  }
-});
+    const cleanedPhone = phone.trim(); // ⚠️ تأكد أن المستخدم يدخل +218 بنفسه
+    const phoneRegex = /^\+2189\d{8}$/;
 
-app.listen(3000, '0.0.0.0', () => {
-  console.log("🚀 Server running on http://0.0.0.0:3000");
-});
+    if (!selectedMosque || !phoneRegex.test(cleanedPhone)) {
+      setStatus("❗ تأكد من تعبئة البيانات بشكل صحيح");
+      return;
+    }
+
+    const amount = quantity * pricePerStick;
+    setIsLoading(true);
+    setStatus(null);
+
+    try {
+      console.log("📤 إرسال:", { customer: cleanedPhone, amount, mosque: selectedMosque, quantity });
+      const response = await axios.post("https://api.saniah.ly/pay", {
+        customer: cleanedPhone,
+        amount,
+        mosque: selectedMosque,
+        quantity,
+      });
+
+      const sessionID = (response.data.sessionID || "").toString().trim();
+
+      if (!sessionID || sessionID.length < 10) {
+        setStatus("❌ استجابة غير متوقعة من المصرف");
+        return;
+      }
+
+      navigate("/confirm", {
+        state: {
+          phone: cleanedPhone,
+          quantity,
+          mosque: selectedMosque,
+          sessionID,
+        },
+      });
+
+    } catch (error) {
+      console.error("❌ فشل:", error);
+      setStatus("❌ فشل في إتمام العملية، الرجاء المحاولة لاحقًا");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="p-4 max-w-md mx-auto">
+      <h1 className="text-2xl font-bold text-center mb-6">نموذج التبرع</h1>
+
+      <div className="space-y-4">
+        <div>
+          <label className="block mb-1">اختر المسجد:</label>
+          <select
+            className="w-full p-2 border rounded"
+            value={selectedMosque}
+            onChange={(e) => setSelectedMosque(e.target.value)}
+            disabled={isLoading}
+          >
+            <option value="">-- اختر مسجد --</option>
+            {mosques.map((mosque) => (
+              <option key={mosque.id} value={mosque.name}>{mosque.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="block mb-1">رقم الهاتف (+2189...):</label>
+          <input
+            type="tel"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            className="w-full p-2 border rounded"
+            disabled={isLoading}
+          />
+        </div>
+
+        <div>
+          <label className="block mb-1">عدد الأستيكات:</label>
+          <input
+            type="number"
+            value={quantity}
+            min={1}
+            max={50}
+            onChange={(e) => setQuantity(Number(e.target.value))}
+            className="w-full p-2 border rounded"
+            disabled={isLoading}
+          />
+        </div>
+
+        <button
+          onClick={handleDonate}
+          disabled={isLoading}
+          className={`w-full py-2 rounded text-white ${isLoading ? "bg-gray-400" : "bg-green-600 hover:bg-green-700"}`}
+        >
+          {isLoading ? "جاري المعالجة..." : "التبرع الآن"}
+        </button>
+
+        {status && <div className="p-2 text-center bg-red-100 text-red-700 rounded">{status}</div>}
+      </div>
+    </div>
+  );
+}
