@@ -1,29 +1,52 @@
 const express = require('express');
 const axios = require('axios');
 const { parseStringPromise } = require('xml2js');
+const admin = require('firebase-admin');
+const cors = require('cors');
 const app = express();
 
+// Middleware
+app.use(cors());
 app.use(express.json());
 
-// ⚠️ يجب استبدال هذه القيم من متغيرات البيئة
-const BANK_PW = "123@xdsr$#!!";
-const BANK_URL = "http://62.240.55.2:6187/BCDUssd/newedfali.asmx";
+// Firebase Initialization
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(require('./serviceAccountKey.json'))
+  });
+}
+const db = admin.firestore();
 
-// نقطة نهاية الدفع
+// Configurations
+const BANK_PW = process.env.BANK_PW || "123@xdsr$#!!";
+const BANK_URL = process.env.BANK_URL || "http://62.240.55.2:6187/BCDUssd/newedfali.asmx";
+
+// Helper Functions
+const logError = (error, context) => {
+  console.error(`❌ [${new Date().toISOString()}] Error in ${context}:`, {
+    message: error.message,
+    stack: error.stack,
+    response: error.response?.data
+  });
+};
+
+const validatePhone = (phone) => {
+  const cleaned = phone.replace(/\s/g, "");
+  return /^\+2189\d{8}$/.test(cleaned) ? cleaned : null;
+};
+
+// Routes
 app.post('/pay', async (req, res) => {
-  const { customer, amount, mosque, quantity } = req.body;
-
   try {
-    // 1. تنظيف رقم الهاتف
-    let phone = customer.replace(/\s/g, "");
+    const { customer, amount, mosque, quantity } = req.body;
     
-    // 2. التحقق من صحة التنسيق
-    const phoneRegex = /^\+2189\d{8}$/;
-    if (!phoneRegex.test(phone)) {
-      return res.status(400).json({ error: "رقم الهاتف غير صحيح" });
+    // Phone Validation
+    const phone = validatePhone(customer);
+    if (!phone) {
+      return res.status(400).json({ error: "رقم الهاتف يجب أن يكون بتنسيق +2189xxxxxxxx" });
     }
 
-    // 3. إنشاء طلب SOAP للمصرف
+    // Create SOAP Request
     const xml = `
     <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
@@ -31,7 +54,7 @@ app.post('/pay', async (req, res) => {
       <soap:Body>
         <DoPTrans xmlns="http://tempuri.org/">
           <Mobile>${phone}</Mobile>
-          <Pin>0000</Pin> <!-- سيتم استبداله لاحقاً بـ OTP -->
+          <Pin>0000</Pin>
           <Cmobile>${phone}</Cmobile>
           <Amount>${amount}</Amount>
           <PW>${BANK_PW}</PW>
@@ -39,57 +62,56 @@ app.post('/pay', async (req, res) => {
       </soap:Body>
     </soap:Envelope>`;
 
-    // 4. إرسال الطلب للمصرف
+    // Send to Bank
     const response = await axios.post(BANK_URL, xml, {
       headers: {
         "Content-Type": "text/xml; charset=utf-8",
         SOAPAction: "http://tempuri.org/DoPTrans"
-      }
+      },
+      timeout: 10000
     });
 
-    // 5. معالجة الرد من المصرف
+    // Parse Response
     const parsed = await parseStringPromise(response.data);
     const sessionID = parsed['soap:Envelope']['soap:Body'][0]['DoPTransResponse'][0]['DoPTransResult'][0];
     
-    // 6. التحقق من صحة sessionID
     if (!sessionID || sessionID.length < 10) {
-      return res.status(500).json({ error: "فشل في الحصول على معرف الجلسة من المصرف" });
+      throw new Error("Invalid session ID from bank");
     }
 
-    // 7. تخزين معلومات الجلسة في قاعدة البيانات (يجب تطبيق هذا)
-    // saveSessionToDB(sessionID, phone, amount, mosque, quantity);
+    // Save to Firestore
+    await db.collection('transactions').doc(sessionID).set({
+      phone,
+      amount,
+      mosque,
+      quantity,
+      status: 'pending',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
 
-    // 8. إرجاع الاستجابة للفرونت إند
-    res.json({ sessionID });
+    res.json({ sessionID, phone });
 
   } catch (error) {
-    console.error("❌ خطأ في الباك إند:", error);
-    
-    // تحسين رسائل الخطأ
-    let errorMessage = "فشل في الاتصال بالمصرف";
-    
-    if (error.response) {
-      console.error("رد المصرف:", error.response.data);
-      
-      // محاولة استخراج رسالة الخطأ من XML
-      if (error.response.data.includes('<faultstring>')) {
-        const faultMatch = error.response.data.match(/<faultstring>([^<]+)<\/faultstring>/);
-        if (faultMatch) {
-          errorMessage = `خطأ من المصرف: ${faultMatch[1]}`;
-        }
-      }
-    }
-    
-    res.status(500).json({ error: errorMessage });
+    logError(error, "payment");
+    const message = error.response?.data?.includes?.('<faultstring>') 
+      ? error.response.data.match(/<faultstring>([^<]+)<\/faultstring>/)[1]
+      : "فشل في عملية الدفع";
+    res.status(500).json({ error: message });
   }
 });
 
-// نقطة نهاية لتأكيد الدفع
 app.post('/confirm', async (req, res) => {
-  const { sessionID, otp, phone } = req.body;
-
   try {
-    // 1. إنشاء طلب SOAP لتأكيد الدفع
+    const { sessionID, otp, phone } = req.body;
+
+    // Verify Transaction Exists
+    const doc = await db.collection('transactions').doc(sessionID).get();
+    if (!doc.exists) {
+      return res.status(404).json({ error: "لم يتم العثور على المعاملة" });
+    }
+
+    // SOAP Request
     const xml = `
     <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
@@ -104,35 +126,76 @@ app.post('/confirm', async (req, res) => {
       </soap:Body>
     </soap:Envelope>`;
 
-    // 2. إرسال طلب التأكيد للمصرف
+    // Send Confirmation
     const response = await axios.post(BANK_URL, xml, {
       headers: {
         "Content-Type": "text/xml; charset=utf-8",
         SOAPAction: "http://tempuri.org/OnlineConfTrans"
-      }
+      },
+      timeout: 10000
     });
 
-    // 3. معالجة الرد من المصرف
+    // Parse Response
     const parsed = await parseStringPromise(response.data);
     const result = parsed['soap:Envelope']['soap:Body'][0]['OnlineConfTransResponse'][0]['OnlineConfTransResult'][0];
     
-    // 4. التحقق من نجاح العملية
+    // Update Firestore
     if (result.toLowerCase().includes('success')) {
-      // تحديث حالة الدفع في قاعدة البيانات (يجب تطبيق هذا)
-      // updatePaymentStatus(sessionID, 'success');
+      await db.collection('transactions').doc(sessionID).update({
+        status: 'completed',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
       return res.json({ success: true, message: "تمت العملية بنجاح" });
     } else {
+      await db.collection('transactions').doc(sessionID).update({
+        status: 'failed',
+        bankMessage: result,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
       return res.status(400).json({ error: result });
     }
 
   } catch (error) {
-    console.error("❌ خطأ في تأكيد الدفع:", error);
+    logError(error, "confirmation");
     res.status(500).json({ error: "فشل في تأكيد الدفع" });
   }
 });
 
-// بدء الخادم
+// New Verify Endpoint
+app.get('/verify/:sessionID', async (req, res) => {
+  try {
+    const { sessionID } = req.params;
+    const doc = await db.collection('transactions').doc(sessionID).get();
+    
+    if (!doc.exists) {
+      return res.status(404).json({ 
+        status: 'not_found',
+        message: 'لم يتم العثور على المعاملة'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      data: doc.data()
+    });
+    
+  } catch (error) {
+    logError(error, "verification");
+    res.status(500).json({
+      status: 'error',
+      message: 'حدث خطأ أثناء التحقق'
+    });
+  }
+});
+
+// Error Handling Middleware
+app.use((err, req, res, next) => {
+  logError(err, "server");
+  res.status(500).json({ error: "حدث خطأ غير متوقع" });
+});
+
+// Start Server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`✅ الخادم يعمل على المنفذ ${PORT}`);
+  console.log(`✅ Server running on port ${PORT}`);
 });
