@@ -1,202 +1,362 @@
-//8/5/2025
+require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const { parseStringPromise } = require('xml2js');
 const admin = require('firebase-admin');
 const cors = require('cors');
+const winston = require('winston');
 const app = express();
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+// ==================================
+// 🔐 Winston Logger Configuration
+// ==================================
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'logs/combined.log' }),
+    new winston.transports.Console({
+      format: winston.format.simple()
+    })
+  ]
+});
 
-// Firebase Initialization
+// ==================================
+// 🔥 Firebase Initialization
+// ==================================
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
+
 if (!admin.apps.length) {
   admin.initializeApp({
-    credential: admin.credential.cert(require('./serviceAccountKey.json'))
+    credential: admin.credential.cert(serviceAccount),
+    databaseURL: process.env.FIREBASE_DATABASE_URL
   });
 }
 const db = admin.firestore();
 
-// Configurations
-const BANK_PW = process.env.BANK_PW || "123@xdsr$#!!";
-const BANK_URL = process.env.BANK_URL || "http://62.240.55.2:6187/BCDUssd/newedfali.asmx";
+// ==================================
+// 🛡️ Middleware
+// ==================================
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGINS.split(',') || '*'
+}));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Helper Functions
-const logError = (error, context) => {
-  console.error(`❌ [${new Date().toISOString()}] Error in ${context}:`, {
-    message: error.message,
-    stack: error.stack,
-    response: error.response?.data
-  });
-};
+// Request logging middleware
+app.use((req, res, next) => {
+  logger.info(`${req.method} ${req.url}`);
+  next();
+});
 
-const validatePhone = (phone) => {
-  const cleaned = phone.replace(/\s/g, "");
-  return /^\+2189\d{8}$/.test(cleaned) ? cleaned : null;
-};
-
-// Routes
-app.post('/pay', async (req, res) => {
-  try {
-    const { customer, amount, mosque, quantity } = req.body;
-    
-    // Phone Validation
-    const phone = validatePhone(customer);
-    if (!phone) {
-      return res.status(400).json({ error: "رقم الهاتف يجب أن يكون بتنسيق +2189xxxxxxxx" });
-    }
-
-    // Create SOAP Request
-    const xml = `
+// ==================================
+// 🏦 Bank API Helpers
+// ==================================
+const buildSoapRequest = (action, data) => {
+  const templates = {
+    DoPTrans: `
     <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
                    xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
       <soap:Body>
         <DoPTrans xmlns="http://tempuri.org/">
-          <Mobile>${phone}</Mobile>
-          <Pin>0000</Pin>
-          <Cmobile>${phone}</Cmobile>
-          <Amount>${amount}</Amount>
-          <PW>${BANK_PW}</PW>
+          <Mobile>${data.phone}</Mobile>
+          <Pin>${data.pin || '0000'}</Pin>
+          <Cmobile>${data.phone}</Cmobile>
+          <Amount>${data.amount}</Amount>
+          <PW>${process.env.BANK_PW}</PW>
         </DoPTrans>
       </soap:Body>
-    </soap:Envelope>`;
+    </soap:Envelope>`,
 
-    // Send to Bank
-    const response = await axios.post(BANK_URL, xml, {
-      headers: {
-        "Content-Type": "text/xml; charset=utf-8",
-        SOAPAction: "http://tempuri.org/DoPTrans"
-      },
-      timeout: 10000
-    });
-
-    // Parse Response
-    const parsed = await parseStringPromise(response.data);
-    const sessionID = parsed['soap:Envelope']['soap:Body'][0]['DoPTransResponse'][0]['DoPTransResult'][0];
-    
-    if (!sessionID || sessionID.length < 10) {
-      throw new Error("Invalid session ID from bank");
-    }
-
-    // Save to Firestore
-    await db.collection('transactions').doc(sessionID).set({
-      phone,
-      amount,
-      mosque,
-      quantity,
-      status: 'pending',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    res.json({ sessionID, phone });
-
-  } catch (error) {
-    logError(error, "payment");
-    const message = error.response?.data?.includes?.('<faultstring>') 
-      ? error.response.data.match(/<faultstring>([^<]+)<\/faultstring>/)[1]
-      : "فشل في عملية الدفع";
-    res.status(500).json({ error: message });
-  }
-});
-
-app.post('/confirm', async (req, res) => {
-  try {
-    const { sessionID, otp, phone } = req.body;
-
-    // Verify Transaction Exists
-    const doc = await db.collection('transactions').doc(sessionID).get();
-    if (!doc.exists) {
-      return res.status(404).json({ error: "لم يتم العثور على المعاملة" });
-    }
-
-    // SOAP Request
-    const xml = `
+    OnlineConfTrans: `
     <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
                    xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
       <soap:Body>
         <OnlineConfTrans xmlns="http://tempuri.org/">
-          <Mobile>${phone}</Mobile>
-          <Pin>${otp}</Pin>
-          <sessionID>${sessionID}</sessionID>
-          <PW>${BANK_PW}</PW>
+          <Mobile>${data.phone}</Mobile>
+          <Pin>${data.otp}</Pin>
+          <sessionID>${data.sessionID}</sessionID>
+          <PW>${process.env.BANK_PW}</PW>
         </OnlineConfTrans>
       </soap:Body>
-    </soap:Envelope>`;
+    </soap:Envelope>`
+  };
 
-    // Send Confirmation
-    const response = await axios.post(BANK_URL, xml, {
-      headers: {
-        "Content-Type": "text/xml; charset=utf-8",
-        SOAPAction: "http://tempuri.org/OnlineConfTrans"
-      },
-      timeout: 10000
-    });
+  return {
+    xml: templates[action],
+    headers: {
+      "Content-Type": "text/xml; charset=utf-8",
+      "SOAPAction": `http://tempuri.org/${action}`
+    }
+  };
+};
 
-    // Parse Response
-    const parsed = await parseStringPromise(response.data);
-    const result = parsed['soap:Envelope']['soap:Body'][0]['OnlineConfTransResponse'][0]['OnlineConfTransResult'][0];
-    
-    // Update Firestore
-    if (result.toLowerCase().includes('success')) {
-      await db.collection('transactions').doc(sessionID).update({
-        status: 'completed',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-      return res.json({ success: true, message: "تمت العملية بنجاح" });
-    } else {
-      await db.collection('transactions').doc(sessionID).update({
-        status: 'failed',
-        bankMessage: result,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-      return res.status(400).json({ error: result });
+// ==================================
+// 💳 Payment Endpoints
+// ==================================
+
+/**
+ * @route POST /pay
+ * @desc Initiate payment transaction
+ */
+app.post('/pay', async (req, res) => {
+  try {
+    const { customer, amount, mosque, quantity } = req.body;
+
+    // Input validation
+    if (!customer || !amount || !mosque || !quantity) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
+    // Phone validation
+    const phone = customer.replace(/\s/g, "");
+    if (!/^\+2189\d{8}$/.test(phone)) {
+      return res.status(400).json({ error: "Invalid phone format. Use +2189xxxxxxxx" });
+    }
+
+    // Build SOAP request
+    const { xml, headers } = buildSoapRequest('DoPTrans', {
+      phone,
+      amount,
+      pin: '0000' // Temporary PIN
+    });
+
+    // Send to bank
+    const response = await axios.post(process.env.BANK_URL, xml, {
+      headers,
+      timeout: 15000
+    });
+
+    // Parse response
+    const parsed = await parseStringPromise(response.data, {
+      explicitArray: false,
+      ignoreAttrs: true
+    });
+
+    const sessionID = parsed?.['soap:Envelope']?.['soap:Body']?.['DoPTransResponse']?.['DoPTransResult'];
+    
+    if (!sessionID) {
+      throw new Error("Invalid bank response: Missing sessionID");
+    }
+
+    // Save transaction
+    const txRef = db.collection('transactions').doc(sessionID);
+    await txRef.set({
+      phone,
+      amount: Number(amount),
+      mosque,
+      quantity: Number(quantity),
+      status: 'pending',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    logger.info(`Payment initiated for ${phone} - Session: ${sessionID}`);
+
+    res.json({
+      success: true,
+      sessionID,
+      phone // Return formatted phone for verification
+    });
+
   } catch (error) {
-    logError(error, "confirmation");
-    res.status(500).json({ error: "فشل في تأكيد الدفع" });
+    logger.error(`Payment Error: ${error.message}`, {
+      error: error.stack,
+      request: req.body
+    });
+
+    const errorMessage = error.response?.data?.includes?.('<faultstring>') 
+      ? error.response.data.match(/<faultstring>([^<]+)<\/faultstring>/)?.[1] 
+      : "Payment processing failed";
+
+    res.status(500).json({
+      error: errorMessage,
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 
-// New Verify Endpoint
+/**
+ * @route POST /confirm
+ * @desc Confirm payment with OTP
+ */
+app.post('/confirm', async (req, res) => {
+  try {
+    const { sessionID, otp, phone } = req.body;
+
+    // Input validation
+    if (!sessionID || !otp || !phone) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Verify transaction exists
+    const txRef = db.collection('transactions').doc(sessionID);
+    const txDoc = await txRef.get();
+
+    if (!txDoc.exists) {
+      return res.status(404).json({ error: "Transaction not found" });
+    }
+
+    // Build SOAP request
+    const { xml, headers } = buildSoapRequest('OnlineConfTrans', {
+      phone,
+      otp,
+      sessionID
+    });
+
+    // Send confirmation
+    const response = await axios.post(process.env.BANK_URL, xml, {
+      headers,
+      timeout: 15000
+    });
+
+    // Parse response
+    const parsed = await parseStringPromise(response.data, {
+      explicitArray: false,
+      ignoreAttrs: true
+    });
+
+    const result = parsed?.['soap:Envelope']?.['soap:Body']?.['OnlineConfTransResponse']?.['OnlineConfTransResult'];
+
+    // Update transaction
+    if (result && result.toLowerCase().includes('success')) {
+      await txRef.update({
+        status: 'completed',
+        otpVerified: true,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      logger.info(`Payment confirmed for session: ${sessionID}`);
+
+      return res.json({
+        success: true,
+        message: "Payment completed successfully"
+      });
+    }
+
+    // Handle failure
+    await txRef.update({
+      status: 'failed',
+      bankResponse: result,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    logger.warn(`Payment failed for session: ${sessionID}`, { bankResponse: result });
+
+    res.status(400).json({
+      error: result || "Payment confirmation failed"
+    });
+
+  } catch (error) {
+    logger.error(`Confirmation Error: ${error.message}`, {
+      error: error.stack,
+      sessionID: req.body.sessionID
+    });
+
+    res.status(500).json({
+      error: "Confirmation failed",
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * @route GET /verify/:sessionID
+ * @desc Verify transaction status
+ */
 app.get('/verify/:sessionID', async (req, res) => {
   try {
     const { sessionID } = req.params;
-    const doc = await db.collection('transactions').doc(sessionID).get();
-    
-    if (!doc.exists) {
+
+    if (!sessionID || sessionID.length < 10) {
+      return res.status(400).json({ error: "Invalid session ID" });
+    }
+
+    const txDoc = await db.collection('transactions').doc(sessionID).get();
+
+    if (!txDoc.exists) {
       return res.status(404).json({ 
         status: 'not_found',
-        message: 'لم يتم العثور على المعاملة'
+        message: 'Transaction not found'
       });
     }
 
+    const txData = txDoc.data();
+
+    logger.info(`Transaction verified: ${sessionID}`, { status: txData.status });
+
     res.json({
       status: 'success',
-      data: doc.data()
+      transaction: {
+        ...txData,
+        id: sessionID,
+        // Convert Firestore timestamps
+        createdAt: txData.createdAt?.toDate()?.toISOString(),
+        updatedAt: txData.updatedAt?.toDate()?.toISOString()
+      }
     });
-    
+
   } catch (error) {
-    logError(error, "verification");
+    logger.error(`Verification Error: ${error.message}`, {
+      error: error.stack,
+      sessionID: req.params.sessionID
+    });
+
     res.status(500).json({
       status: 'error',
-      message: 'حدث خطأ أثناء التحقق'
+      message: 'Verification failed'
     });
   }
 });
 
-// Error Handling Middleware
-app.use((err, req, res, next) => {
-  logError(err, "server");
-  res.status(500).json({ error: "حدث خطأ غير متوقع" });
+// ==================================
+// 🏁 Health Check & Error Handling
+// ==================================
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    version: process.env.npm_package_version
+  });
 });
 
-// Start Server
+// 404 Handler
+app.use((req, res) => {
+  res.status(404).json({ error: "Endpoint not found" });
+});
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+  logger.error(`Global Error: ${err.message}`, {
+    error: err.stack,
+    url: req.originalUrl
+  });
+
+  res.status(500).json({
+    error: "Internal server error",
+    ...(process.env.NODE_ENV === 'development' && { details: err.message })
+  });
+});
+
+// ==================================
+// 🚀 Server Startup
+// ==================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
+  logger.info(`Server started on port ${PORT}`);
+  console.log(`
+  ███████╗ █████╗ ███╗   ██╗██╗██╗  ██╗
+  ██╔════╝██╔══██╗████╗  ██║██║╚██╗██╔╝
+  ███████╗███████║██╔██╗ ██║██║ ╚███╔╝ 
+  ╚════██║██╔══██║██║╚██╗██║██║ ██╔██╗ 
+  ███████║██║  ██║██║ ╚████║██║██╔╝ ██╗
+  ╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝
+  Server ready on port ${PORT}
+  `);
 });
