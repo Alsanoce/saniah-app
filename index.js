@@ -1,61 +1,61 @@
+// 06/08/2025
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const { parseStringPromise } = require('xml2js');
 const admin = require('firebase-admin');
 const cors = require('cors');
+const { v4: uuidv4 } = require('uuid');
 const winston = require('winston');
 const app = express();
 
-// ==================================
-// 🔐 Winston Logger Configuration
-// ==================================
+// ==================== Logger Configuration ====================
 const logger = winston.createLogger({
-  level: 'info',
+  level: process.env.LOG_LEVEL || 'info',
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.json()
   ),
   transports: [
-    new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'logs/combined.log' }),
-    new winston.transports.Console({
-      format: winston.format.simple()
-    })
+    new winston.transports.File({ 
+      filename: 'logs/error.log', 
+      level: 'error',
+      maxsize: 5 * 1024 * 1024
+    }),
+    new winston.transports.File({ 
+      filename: 'logs/combined.log',
+      maxsize: 10 * 1024 * 1024
+    }),
+    new winston.transports.Console()
   ]
 });
 
-// ==================================
-// 🔥 Firebase Initialization
-// ==================================
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
+// ==================== Firebase Initialization ====================
+const serviceAccount = require('./serviceAccountKey.json');
 
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    databaseURL: process.env.FIREBASE_DATABASE_URL
-  });
-}
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL: process.env.FIREBASE_DATABASE_URL
+});
+
 const db = admin.firestore();
 
-// ==================================
-// 🛡️ Middleware
-// ==================================
+// ==================== Middleware ====================
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS.split(',') || '*'
+  origin: process.env.ALLOWED_ORIGINS.split(',')
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// Request logging middleware
+app.use(express.json({ limit: '10kb' }));
 app.use((req, res, next) => {
-  logger.info(`${req.method} ${req.url}`);
+  req.requestId = uuidv4();
+  logger.info(`Incoming ${req.method} request to ${req.path}`, {
+    requestId: req.requestId,
+    body: req.body
+  });
   next();
 });
 
-// ==================================
-// 🏦 Bank API Helpers
-// ==================================
+// ==================== Helper Functions ====================
 const buildSoapRequest = (action, data) => {
   const templates = {
     DoPTrans: `
@@ -97,266 +97,125 @@ const buildSoapRequest = (action, data) => {
   };
 };
 
-// ==================================
-// 💳 Payment Endpoints
-// ==================================
+const parseBankResponse = async (xmlData, action) => {
+  try {
+    const parsed = await parseStringPromise(xmlData, {
+      explicitArray: false,
+      ignoreAttrs: true
+    });
+
+    const result = parsed?.['soap:Envelope']?.['soap:Body']?.[`${action}Response`]?.[`${action}Result`];
+    
+    if (!result) {
+      throw new Error(`Invalid ${action} response structure`);
+    }
+
+    return result;
+  } catch (error) {
+    logger.error(`Failed to parse bank response`, {
+      error: error.message,
+      rawResponse: xmlData.substring(0, 300)
+    });
+    throw error;
+  }
+};
+
+// ==================== API Endpoints ====================
 
 /**
- * @route POST /pay
+ * @route POST /api/pay
  * @desc Initiate payment transaction
  */
-app.post('/pay', async (req, res) => {
+app.post('/api/pay', async (req, res) => {
   try {
     const { customer, amount, mosque, quantity } = req.body;
 
-    // Input validation
+    // Validation
     if (!customer || !amount || !mosque || !quantity) {
-      return res.status(400).json({ error: "Missing required fields" });
+      return res.status(400).json({ 
+        error: "جميع الحقول مطلوبة",
+        details: {
+          missing: [
+            !customer && "customer",
+            !amount && "amount",
+            !mosque && "mosque",
+            !quantity && "quantity"
+          ].filter(Boolean)
+        }
+      });
     }
 
-    // Phone validation
     const phone = customer.replace(/\s/g, "");
-    if (!/^\+2189\d{8}$/.test(phone)) {
-      return res.status(400).json({ error: "Invalid phone format. Use +2189xxxxxxxx" });
+    if (!/^\+218[92]\d{8}$/.test(phone)) {
+      return res.status(400).json({
+        error: "رقم الهاتف يجب أن يبدأ بـ +2189 أو +2182 ويتبعه 8 أرقام"
+      });
     }
 
-    // Build SOAP request
+    // Prepare transaction
     const { xml, headers } = buildSoapRequest('DoPTrans', {
       phone,
-      amount,
-      pin: '0000' // Temporary PIN
+      amount: parseFloat(amount).toFixed(2)
     });
 
     // Send to bank
-    const response = await axios.post(process.env.BANK_URL, xml, {
+    const response = await axios.post(process.env.BANK_URL, xml, { 
       headers,
       timeout: 15000
     });
 
     // Parse response
-    const parsed = await parseStringPromise(response.data, {
-      explicitArray: false,
-      ignoreAttrs: true
-    });
+    const sessionID = await parseBankResponse(response.data, 'DoPTrans');
 
-    const sessionID = parsed?.['soap:Envelope']?.['soap:Body']?.['DoPTransResponse']?.['DoPTransResult'];
-    
-    if (!sessionID) {
-      throw new Error("Invalid bank response: Missing sessionID");
-    }
-
-    // Save transaction
-    const txRef = db.collection('transactions').doc(sessionID);
-    await txRef.set({
+    // Save to Firestore
+    await db.collection('transactions').doc(sessionID).set({
       phone,
-      amount: Number(amount),
+      amount: parseFloat(amount),
       mosque,
-      quantity: Number(quantity),
+      quantity: parseInt(quantity),
       status: 'pending',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    logger.info(`Payment initiated for ${phone} - Session: ${sessionID}`);
-
     res.json({
       success: true,
       sessionID,
-      phone // Return formatted phone for verification
+      phone: phone
     });
 
   } catch (error) {
-    logger.error(`Payment Error: ${error.message}`, {
-      error: error.stack,
-      request: req.body
+    logger.error('Payment processing failed', {
+      error: error.message,
+      stack: error.stack,
+      requestId: req.requestId,
+      requestBody: req.body
     });
 
+    const statusCode = error.response?.status || 500;
     const errorMessage = error.response?.data?.includes?.('<faultstring>') 
-      ? error.response.data.match(/<faultstring>([^<]+)<\/faultstring>/)?.[1] 
-      : "Payment processing failed";
+      ? error.response.data.match(/<faultstring>([^<]+)<\/faultstring>/)[1]
+      : "فشل في عملية الدفع";
 
-    res.status(500).json({
+    res.status(statusCode).json({
+      success: false,
       error: errorMessage,
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      requestId: req.requestId
     });
   }
 });
 
-/**
- * @route POST /confirm
- * @desc Confirm payment with OTP
- */
-app.post('/confirm', async (req, res) => {
-  try {
-    const { sessionID, otp, phone } = req.body;
-
-    // Input validation
-    if (!sessionID || !otp || !phone) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    // Verify transaction exists
-    const txRef = db.collection('transactions').doc(sessionID);
-    const txDoc = await txRef.get();
-
-    if (!txDoc.exists) {
-      return res.status(404).json({ error: "Transaction not found" });
-    }
-
-    // Build SOAP request
-    const { xml, headers } = buildSoapRequest('OnlineConfTrans', {
-      phone,
-      otp,
-      sessionID
-    });
-
-    // Send confirmation
-    const response = await axios.post(process.env.BANK_URL, xml, {
-      headers,
-      timeout: 15000
-    });
-
-    // Parse response
-    const parsed = await parseStringPromise(response.data, {
-      explicitArray: false,
-      ignoreAttrs: true
-    });
-
-    const result = parsed?.['soap:Envelope']?.['soap:Body']?.['OnlineConfTransResponse']?.['OnlineConfTransResult'];
-
-    // Update transaction
-    if (result && result.toLowerCase().includes('success')) {
-      await txRef.update({
-        status: 'completed',
-        otpVerified: true,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-
-      logger.info(`Payment confirmed for session: ${sessionID}`);
-
-      return res.json({
-        success: true,
-        message: "Payment completed successfully"
-      });
-    }
-
-    // Handle failure
-    await txRef.update({
-      status: 'failed',
-      bankResponse: result,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    logger.warn(`Payment failed for session: ${sessionID}`, { bankResponse: result });
-
-    res.status(400).json({
-      error: result || "Payment confirmation failed"
-    });
-
-  } catch (error) {
-    logger.error(`Confirmation Error: ${error.message}`, {
-      error: error.stack,
-      sessionID: req.body.sessionID
-    });
-
-    res.status(500).json({
-      error: "Confirmation failed",
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-/**
- * @route GET /verify/:sessionID
- * @desc Verify transaction status
- */
-app.get('/verify/:sessionID', async (req, res) => {
-  try {
-    const { sessionID } = req.params;
-
-    if (!sessionID || sessionID.length < 10) {
-      return res.status(400).json({ error: "Invalid session ID" });
-    }
-
-    const txDoc = await db.collection('transactions').doc(sessionID).get();
-
-    if (!txDoc.exists) {
-      return res.status(404).json({ 
-        status: 'not_found',
-        message: 'Transaction not found'
-      });
-    }
-
-    const txData = txDoc.data();
-
-    logger.info(`Transaction verified: ${sessionID}`, { status: txData.status });
-
-    res.json({
-      status: 'success',
-      transaction: {
-        ...txData,
-        id: sessionID,
-        // Convert Firestore timestamps
-        createdAt: txData.createdAt?.toDate()?.toISOString(),
-        updatedAt: txData.updatedAt?.toDate()?.toISOString()
-      }
-    });
-
-  } catch (error) {
-    logger.error(`Verification Error: ${error.message}`, {
-      error: error.stack,
-      sessionID: req.params.sessionID
-    });
-
-    res.status(500).json({
-      status: 'error',
-      message: 'Verification failed'
-    });
-  }
-});
-
-// ==================================
-// 🏁 Health Check & Error Handling
-// ==================================
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    version: process.env.npm_package_version
-  });
-});
-
-// 404 Handler
-app.use((req, res) => {
-  res.status(404).json({ error: "Endpoint not found" });
-});
-
-// Global Error Handler
-app.use((err, req, res, next) => {
-  logger.error(`Global Error: ${err.message}`, {
-    error: err.stack,
-    url: req.originalUrl
-  });
-
-  res.status(500).json({
-    error: "Internal server error",
-    ...(process.env.NODE_ENV === 'development' && { details: err.message })
-  });
-});
-
-// ==================================
-// 🚀 Server Startup
-// ==================================
+// ==================== Server Startup ====================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   logger.info(`Server started on port ${PORT}`);
   console.log(`
-  ███████╗ █████╗ ███╗   ██╗██╗██╗  ██╗
-  ██╔════╝██╔══██╗████╗  ██║██║╚██╗██╔╝
-  ███████╗███████║██╔██╗ ██║██║ ╚███╔╝ 
-  ╚════██║██╔══██║██║╚██╗██║██║ ██╔██╗ 
-  ███████║██║  ██║██║ ╚████║██║██╔╝ ██╗
-  ╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝
+  ██████╗  █████╗ ██╗  ██╗███████╗
+  ██╔══██╗██╔══██╗██║ ██╔╝██╔════╝
+  ██████╔╝███████║█████╔╝ █████╗  
+  ██╔══██╗██╔══██║██╔═██╗ ██╔══╝  
+  ██████╔╝██║  ██║██║  ██╗███████╗
+  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝
   Server ready on port ${PORT}
   `);
 });
