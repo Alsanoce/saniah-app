@@ -1,12 +1,13 @@
-// 06/08/2025
+// index.js
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const { parseStringPromise } = require('xml2js');
-const admin = require('firebase-admin');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const winston = require('winston');
+const { admin, db } = require('./firebase'); // استخدام ملف firebase.js الجديد
+
 const app = express();
 
 // ==================== Logger Configuration ====================
@@ -29,16 +30,6 @@ const logger = winston.createLogger({
     new winston.transports.Console()
   ]
 });
-
-// ==================== Firebase Initialization ====================
-const serviceAccount = require('./serviceAccountKey.json');
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: process.env.FIREBASE_DATABASE_URL
-});
-
-const db = admin.firestore();
 
 // ==================== Middleware ====================
 app.use(cors({
@@ -146,28 +137,26 @@ app.post('/api/pay', async (req, res) => {
     }
 
     const phone = customer.replace(/\s/g, "");
+    logger.info("Phone after cleanup", { raw: customer, cleaned: phone });
+
     if (!/^\+218[92]\d{8}$/.test(phone)) {
       return res.status(400).json({
         error: "رقم الهاتف يجب أن يبدأ بـ +2189 أو +2182 ويتبعه 8 أرقام"
       });
     }
 
-    // Prepare transaction
     const { xml, headers } = buildSoapRequest('DoPTrans', {
       phone,
       amount: parseFloat(amount).toFixed(2)
     });
 
-    // Send to bank
     const response = await axios.post(process.env.BANK_URL, xml, { 
       headers,
       timeout: 15000
     });
 
-    // Parse response
     const sessionID = await parseBankResponse(response.data, 'DoPTrans');
 
-    // Save to Firestore
     await db.collection('transactions').doc(sessionID).set({
       phone,
       amount: parseFloat(amount),
