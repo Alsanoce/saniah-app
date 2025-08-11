@@ -157,15 +157,6 @@ app.post('/api/pay', async (req, res) => {
 
     const sessionID = await parseBankResponse(response.data, 'DoPTrans');
 
-    await db.collection('transactions').doc(sessionID).set({
-      phone,
-      amount: parseFloat(amount),
-      mosque,
-      quantity: parseInt(quantity),
-      status: 'pending',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
 
     res.json({
       success: true,
