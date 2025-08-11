@@ -6,7 +6,7 @@ const { parseStringPromise } = require('xml2js');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const winston = require('winston');
-const { admin, db } = require('./firebase'); // استخدام ملف firebase.js الجديد
+
 
 const app = express();
 
