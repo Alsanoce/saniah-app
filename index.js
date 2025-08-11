@@ -8,27 +8,6 @@ const winston = require('winston');
 
 const app = express();
 
-// ==================== CORS Middleware ====================
-app.use(cors({
-  origin: function(origin, callback) {
-    const allowedOrigins = process.env.ALLOWED_ORIGINS
-      ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim())
-      : [];
-
-    // السماح بالطلبات بدون origin (مثل curl أو بعض المتصفحات)
-    if (!origin) return callback(null, true);
-
-    if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = `CORS policy: Origin ${origin} is not allowed by CORS`;
-      return callback(new Error(msg), false);
-    }
-    return callback(null, true);
-  },
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-}));
-
 // ==================== Logger Configuration ====================
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
@@ -51,7 +30,11 @@ const logger = winston.createLogger({
 });
 
 // ==================== Middleware ====================
+app.use(cors());  // يسمح لجميع النطاقات
+app.options('*', cors()); // يدعم preflight requests
+
 app.use(express.json({ limit: '10kb' }));
+
 app.use((req, res, next) => {
   req.requestId = uuidv4();
   logger.info(`Incoming ${req.method} request to ${req.path}`, {
@@ -127,6 +110,11 @@ const parseBankResponse = async (xmlData, action) => {
 };
 
 // ==================== API Endpoints ====================
+
+/**
+ * @route POST /api/pay
+ * @desc Initiate payment transaction
+ */
 app.post('/api/pay', async (req, res) => {
   try {
     const { customer, amount, mosque, quantity } = req.body;
@@ -167,7 +155,7 @@ app.post('/api/pay', async (req, res) => {
 
     const sessionID = await parseBankResponse(response.data, 'DoPTrans');
 
-    // حذفنا تخزين البيانات في فايربيس هنا
+    // بيانات الحفظ في قاعدة بيانات أو ملف (محذوفة هنا)
 
     res.json({
       success: true,
