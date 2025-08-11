@@ -1,4 +1,3 @@
-// index.js
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
@@ -6,7 +5,6 @@ const { parseStringPromise } = require('xml2js');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const winston = require('winston');
-
 
 const app = express();
 
@@ -18,12 +16,12 @@ const logger = winston.createLogger({
     winston.format.json()
   ),
   transports: [
-    new winston.transports.File({ 
-      filename: 'logs/error.log', 
+    new winston.transports.File({
+      filename: 'logs/error.log',
       level: 'error',
       maxsize: 5 * 1024 * 1024
     }),
-    new winston.transports.File({ 
+    new winston.transports.File({
       filename: 'logs/combined.log',
       maxsize: 10 * 1024 * 1024
     }),
@@ -96,7 +94,7 @@ const parseBankResponse = async (xmlData, action) => {
     });
 
     const result = parsed?.['soap:Envelope']?.['soap:Body']?.[`${action}Response`]?.[`${action}Result`];
-    
+
     if (!result) {
       throw new Error(`Invalid ${action} response structure`);
     }
@@ -123,7 +121,7 @@ app.post('/api/pay', async (req, res) => {
 
     // Validation
     if (!customer || !amount || !mosque || !quantity) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: "جميع الحقول مطلوبة",
         details: {
           missing: [
@@ -150,13 +148,15 @@ app.post('/api/pay', async (req, res) => {
       amount: parseFloat(amount).toFixed(2)
     });
 
-    const response = await axios.post(process.env.BANK_URL, xml, { 
+    const response = await axios.post(process.env.BANK_URL, xml, {
       headers,
       timeout: 15000
     });
 
     const sessionID = await parseBankResponse(response.data, 'DoPTrans');
 
+    // هنا كان حفظ البيانات في فايربيس، تم حذفه
+    // لو تحب ممكن نستبدله بتخزين في ملف أو قاعدة بيانات ثانية
 
     res.json({
       success: true,
@@ -173,7 +173,7 @@ app.post('/api/pay', async (req, res) => {
     });
 
     const statusCode = error.response?.status || 500;
-    const errorMessage = error.response?.data?.includes?.('<faultstring>') 
+    const errorMessage = error.response?.data?.includes?.('<faultstring>')
       ? error.response.data.match(/<faultstring>([^<]+)<\/faultstring>/)[1]
       : "فشل في عملية الدفع";
 
