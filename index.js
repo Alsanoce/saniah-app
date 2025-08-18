@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: '.env', silent: true });
 const express = require('express');
 const axios = require('axios');
 const { parseStringPromise } = require('xml2js');
