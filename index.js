@@ -30,8 +30,14 @@ const logger = winston.createLogger({
 });
 
 // ==================== Middleware ====================
-app.use(cors());  // يسمح لجميع النطاقات
-app.options('*', cors()); // يدعم preflight requests
+// ضبط CORS
+app.use(cors({
+  origin: ["https://saniah.ly", "https://www.saniah.ly"],
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-request-id"],
+  credentials: true
+}));
+app.options('*', cors());
 
 app.use(express.json({ limit: '10kb' }));
 
@@ -110,7 +116,6 @@ const parseBankResponse = async (xmlData, action) => {
 };
 
 // ==================== API Endpoints ====================
-
 /**
  * @route POST /api/pay
  * @desc Initiate payment transaction
@@ -154,8 +159,6 @@ app.post('/api/pay', async (req, res) => {
     });
 
     const sessionID = await parseBankResponse(response.data, 'DoPTrans');
-
-    // بيانات الحفظ في قاعدة بيانات أو ملف (محذوفة هنا)
 
     res.json({
       success: true,
