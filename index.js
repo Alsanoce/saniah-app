@@ -16,21 +16,13 @@ const logger = winston.createLogger({
     winston.format.json()
   ),
   transports: [
-    new winston.transports.File({
-      filename: 'logs/error.log',
-      level: 'error',
-      maxsize: 5 * 1024 * 1024
-    }),
-    new winston.transports.File({
-      filename: 'logs/combined.log',
-      maxsize: 10 * 1024 * 1024
-    }),
+    new winston.transports.File({ filename: 'logs/error.log', level: 'error', maxsize: 5 * 1024 * 1024 }),
+    new winston.transports.File({ filename: 'logs/combined.log', maxsize: 10 * 1024 * 1024 }),
     new winston.transports.Console()
   ]
 });
 
 // ==================== Middleware ====================
-// ضبط CORS
 app.use(cors({
   origin: ["https://saniah.ly", "https://www.saniah.ly"],
   methods: ["GET", "POST", "OPTIONS"],
@@ -101,9 +93,7 @@ const parseBankResponse = async (xmlData, action) => {
 
     const result = parsed?.['soap:Envelope']?.['soap:Body']?.[`${action}Response`]?.[`${action}Result`];
 
-    if (!result) {
-      throw new Error(`Invalid ${action} response structure`);
-    }
+    if (!result) throw new Error(`Invalid ${action} response structure`);
 
     return result;
   } catch (error) {
@@ -116,26 +106,13 @@ const parseBankResponse = async (xmlData, action) => {
 };
 
 // ==================== API Endpoints ====================
-/**
- * @route POST /api/pay
- * @desc Initiate payment transaction
- */
 app.post('/api/pay', async (req, res) => {
   try {
     const { customer, amount, mosque, quantity } = req.body;
-
-    // Validation
     if (!customer || !amount || !mosque || !quantity) {
       return res.status(400).json({
         error: "جميع الحقول مطلوبة",
-        details: {
-          missing: [
-            !customer && "customer",
-            !amount && "amount",
-            !mosque && "mosque",
-            !quantity && "quantity"
-          ].filter(Boolean)
-        }
+        details: { missing: [!customer && "customer", !amount && "amount", !mosque && "mosque", !quantity && "quantity"].filter(Boolean) }
       });
     }
 
@@ -143,61 +120,23 @@ app.post('/api/pay', async (req, res) => {
     logger.info("Phone after cleanup", { raw: customer, cleaned: phone });
 
     if (!/^\+218[92]\d{8}$/.test(phone)) {
-      return res.status(400).json({
-        error: "رقم الهاتف يجب أن يبدأ بـ +2189 أو +2182 ويتبعه 8 أرقام"
-      });
+      return res.status(400).json({ error: "رقم الهاتف يجب أن يبدأ بـ +2189 أو +2182 ويتبعه 8 أرقام" });
     }
 
-    const { xml, headers } = buildSoapRequest('DoPTrans', {
-      phone,
-      amount: parseFloat(amount).toFixed(2)
-    });
-
-    const response = await axios.post(process.env.BANK_URL, xml, {
-      headers,
-      timeout: 15000
-    });
-
+    const { xml, headers } = buildSoapRequest('DoPTrans', { phone, amount: parseFloat(amount).toFixed(2) });
+    const response = await axios.post(process.env.BANK_URL, xml, { headers, timeout: 15000 });
     const sessionID = await parseBankResponse(response.data, 'DoPTrans');
 
-    res.json({
-      success: true,
-      sessionID,
-      phone: phone
-    });
-
+    res.json({ success: true, sessionID, phone });
   } catch (error) {
-    logger.error('Payment processing failed', {
-      error: error.message,
-      stack: error.stack,
-      requestId: req.requestId,
-      requestBody: req.body
-    });
-
+    logger.error('Payment processing failed', { error: error.message, stack: error.stack, requestBody: req.body });
     const statusCode = error.response?.status || 500;
-    const errorMessage = error.response?.data?.includes?.('<faultstring>')
-      ? error.response.data.match(/<faultstring>([^<]+)<\/faultstring>/)[1]
-      : "فشل في عملية الدفع";
-
-    res.status(statusCode).json({
-      success: false,
-      error: errorMessage,
-      requestId: req.requestId
-    });
+    const errorMessage = error.response?.data?.includes?.('<faultstring>') ?
+      error.response.data.match(/<faultstring>([^<]+)<\/faultstring>/)[1] : "فشل في عملية الدفع";
+    res.status(statusCode).json({ success: false, error: errorMessage });
   }
 });
 
 // ==================== Server Startup ====================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  logger.info(`Server started on port ${PORT}`);
-  console.log(`
-  ██████╗  █████╗ ██╗  ██╗███████╗
-  ██╔══██╗██╔══██╗██║ ██╔╝██╔════╝
-  ██████╔╝███████║█████╔╝ █████╗  
-  ██╔══██╗██╔══██║██╔═██╗ ██╔══╝  
-  ██████╔╝██║  ██║██║  ██╗███████╗
-  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝
-  Server ready on port ${PORT}
-  `);
-});
+app.listen(PORT, () => console.log(`Server ready on port ${PORT}`));
